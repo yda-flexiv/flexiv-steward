@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,7 +55,7 @@ def configure_command(project: Path, profile: BuildProfile) -> list[str]:
         profile.platform,
         "bash",
         "-c",
-        f"cd flexiv && cmake --preset {profile.preset}",
+        f"cd flexiv && cmake --preset {shlex.quote(profile.preset)}",
     ]
 
 
@@ -74,7 +75,7 @@ def workflow_test_command(project: Path) -> list[str]:
 
 def run_command(command: list[str], project: Path, dry_run: bool) -> int:
     """Echo a reproducible command and execute it only when requested."""
-    print("$ " + " ".join(command))
+    print("$ " + shlex.join(command))
     if dry_run:
         return 0
     return subprocess.run(command, cwd=project, check=False).returncode

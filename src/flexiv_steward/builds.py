@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 import sys
@@ -170,14 +171,14 @@ def select_build(builds: list[BuildDirectory], directory: str | None) -> BuildDi
 
 def cmake_gui_command(project: Path, build: BuildDirectory) -> list[str]:
     """Return the explicit cmake-gui command for a configured build directory."""
-    if not shutil.which("cmake-gui"):
-        raise ProjectError("cmake-gui is not installed or is not on PATH")
     return ["cmake-gui", "-S", build.source_directory, "-B", str(project / build.directory)]
 
 
 def open_cmake_gui(project: Path, build: BuildDirectory, dry_run: bool) -> int:
     command = cmake_gui_command(project, build)
-    print("$ " + " ".join(command))
+    print("$ " + shlex.join(command))
     if dry_run:
         return 0
+    if not shutil.which("cmake-gui"):
+        raise ProjectError("cmake-gui is not installed or is not on PATH")
     return subprocess.run(command, cwd=project, check=False).returncode

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,7 +29,7 @@ def run_git(project: Path, *args: str) -> str:
     )
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
-        raise ProjectError(f"git {' '.join(args)} failed: {detail}")
+        raise ProjectError(f"{shlex.join(['git', *args])} failed: {detail}")
     return result.stdout.strip()
 
 

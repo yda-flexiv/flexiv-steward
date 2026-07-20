@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -16,20 +17,21 @@ def submodule_command() -> list[str]:
 
 def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
     """Initialize submodules, configure external repositories, then verify versions."""
-    configure = [
-        "bash",
-        "docker/docker_dispatch.sh",
-        "exec",
-        profile.platform,
-        "bash",
-        "-c",
-        f"cd flexiv && cmake --preset {profile.preset}",
-    ]
     if dry_run:
+        configure = [
+            "bash",
+            "docker/docker_dispatch.sh",
+            "exec",
+            profile.platform,
+            "bash",
+            "-c",
+            f"cd flexiv && cmake --preset {shlex.quote(profile.preset)}",
+        ]
         for command in [submodule_command(), configure]:
-            print("$ " + " ".join(command))
+            print("$ " + shlex.join(command))
         print("$ fs deps doctor --strict")
         return 0
+    configure = configure_command(project, profile)
     print("Initializing recursive Git submodules…")
     result = subprocess.run(submodule_command(), cwd=project, check=False).returncode
     if result:

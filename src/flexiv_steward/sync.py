@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def _instructions(worktree: Path) -> str:
     return "\n".join(
         [
             "Resolve the conflicted files, then complete the merge:",
-            f"  cd {worktree}",
+            f"  cd {shlex.quote(str(worktree))}",
             "  git add <resolved-files>",
             "  git commit",
             "Or abandon this synchronization attempt:",
@@ -70,7 +71,7 @@ def sync_worktree(project: Path, identifier: str, base: str, dry_run: bool) -> S
     if changes:
         return SyncResult("dirty", worktree, base, [], "Refusing to merge into a worktree with local changes.")
     fetch = _fetch_command(base)
-    commands = [f"git {' '.join(fetch)}", f"git merge --no-edit {base}"]
+    commands = [shlex.join(["git", *fetch]), shlex.join(["git", "merge", "--no-edit", base])]
     if dry_run:
         return SyncResult("dry-run", worktree, base, [], "\n".join(commands))
     fetch_result = _run(worktree, *fetch)

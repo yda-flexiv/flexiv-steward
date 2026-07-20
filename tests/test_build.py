@@ -27,6 +27,11 @@ class BuildTests(unittest.TestCase):
         profile = resolve_profile("custom", "yocto-debug")
         self.assertEqual(profile.platform, "yocto")
 
+    def test_custom_preset_is_quoted_for_the_shell(self) -> None:
+        profile = resolve_profile("custom", "debug; echo unsafe")
+        shell_command = configure_command(self.project, profile)[-1]
+        self.assertIn("cmake --preset 'debug; echo unsafe'", shell_command)
+
     def test_workflow_test_is_project_local(self) -> None:
         script = self.project / "flexiv" / "tool" / "WorkflowTest" / "run_workflow_test.sh"
         script.parent.mkdir(parents=True)

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from flexiv_steward.builds import cmake_gui_command, list_builds, select_build
+from flexiv_steward.builds import cmake_gui_command, list_builds, open_cmake_gui, select_build
 
 
 class BuildInventoryTests(unittest.TestCase):
@@ -55,3 +55,8 @@ class BuildInventoryTests(unittest.TestCase):
         with patch("flexiv_steward.builds.shutil.which", return_value="/usr/bin/cmake-gui"):
             command = cmake_gui_command(self.project, build)
         self.assertEqual(command[:3], ["cmake-gui", "-S", str(self.project / "flexiv")])
+
+    def test_dry_run_does_not_require_cmake_gui(self) -> None:
+        build = list_builds(self.project)[0]
+        with patch("flexiv_steward.builds.shutil.which", return_value=None):
+            self.assertEqual(open_cmake_gui(self.project, build, dry_run=True), 0)

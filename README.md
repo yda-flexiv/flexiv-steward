@@ -34,6 +34,8 @@ reports an exact preset only when its recorded cache variables match; otherwise
 it identifies the build as custom/modified and shows key cache options. Use
 `fs builds gui` for a numbered terminal selector, or pass a directory/basename
 to open that configured cache directly in `cmake-gui`.
+`fs builds gui --dry-run` prints its command even when `cmake-gui` is not
+installed.
 
 `fs deps doctor` compares direct external repositories (including
 `external/proto`) with the `GIT_TAG` declared in the top-level CMake project,
