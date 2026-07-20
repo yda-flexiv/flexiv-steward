@@ -12,6 +12,7 @@ from flexiv_steward.context import ProjectError, collect_context, format_context
 from flexiv_steward.context import discover_project
 from flexiv_steward.deps import dependency_doctor, dependency_json, format_dependency_doctor, has_dependency_errors
 from flexiv_steward.sessions import SOURCES, format_handoff, handoff
+from flexiv_steward.setup import setup_worktree
 from flexiv_steward.sync import format_sync, sync_worktree
 from flexiv_steward.worktree import format_worktree_doctor, inspect_worktrees
 
@@ -94,6 +95,12 @@ def _dependency_doctor_command(args: argparse.Namespace) -> int:
     return 1 if args.strict and has_dependency_errors(statuses) else 0
 
 
+def _setup_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    profile = resolve_profile(args.profile, args.preset)
+    return setup_worktree(project, profile, args.dry_run)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -134,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--skip-deps-check", action="store_true", help="do not block the build on dependency revision drift")
     build.add_argument("--dry-run", action="store_true", help="print commands without executing them")
     build.set_defaults(handler=_build_command)
+    setup = subcommands.add_parser("setup", help="bootstrap a new worktree and verify dependency revisions")
+    setup.add_argument("profile", nargs="?", default="rca", help="all, rca, ui, debug, or yocto-all")
+    setup.add_argument("--preset", help="use a CMake preset instead of a named profile")
+    setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
+    setup.set_defaults(handler=_setup_command)
     test = subcommands.add_parser("test", help="run project test workflows")
     test_commands = test.add_subparsers(dest="test_command", required=True)
     workflow = test_commands.add_parser("workflow", help="run the WorkflowTest integration runner")

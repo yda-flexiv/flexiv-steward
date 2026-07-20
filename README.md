@@ -11,6 +11,7 @@ fs wt sync RemoveSync2 --dry-run
 fs builds
 fs builds gui RelWithDebInfo
 fs deps doctor --strict
+fs setup rca --dry-run
 fs build all --configure
 fs build rca --target RobotControlApp
 fs test workflow --dry-run
@@ -40,3 +41,7 @@ and checks every recursive Git submodule. Use `--strict` in an agent or build
 preflight to fail on missing or mismatched revisions. `fs build` runs the same
 version check by default; `--skip-deps-check` is an explicit escape hatch. Add
 `--verbose` to list every clean dependency revision.
+
+For a newly created worktree, use `fs setup rca` (or another profile). It
+initializes recursive submodules, runs CMake configure so declared externals
+are checked out, and then verifies all dependency revisions.

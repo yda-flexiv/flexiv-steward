@@ -88,12 +88,13 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
     """Render version drift in a compact form suitable for build preflight output."""
     if not statuses:
         return "No declared external repositories or submodules found."
-    errors = sum(status.state != "ok" for status in statuses)
+    bootstrap = sum(status.state in {"missing", "uninitialized"} for status in statuses)
+    errors = sum(status.state not in {"ok", "missing", "uninitialized"} for status in statuses)
     dirty = sum(status.dirty for status in statuses)
     externals = sum(status.kind == "external" for status in statuses)
     submodules = sum(status.kind == "submodule" for status in statuses)
     lines = [
-        f"Dependency health: {'OK' if not errors and not dirty else 'ATTENTION'}",
+        f"Dependency health: {'OK' if not errors and not dirty and not bootstrap else 'BOOTSTRAP REQUIRED' if bootstrap else 'ATTENTION'}",
         f"Checked {len(statuses)} dependencies ({externals} externals, {submodules} submodules).",
     ]
     displayed = statuses if verbose else [status for status in statuses if status.state != "ok" or status.dirty]
@@ -106,9 +107,11 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
             f"{status.state:<12} {status.kind:<10} {'yes' if status.dirty else 'no':<6} "
             f"{status.name:<34} {expected:<11} {actual}"
         )
-    lines.append(f"\n{errors} version errors; {dirty} dirty checkouts.")
+    lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
     if errors:
         lines.append("Do not build until mismatches are corrected; re-run CMake after restoring the declared revision.")
+    elif bootstrap:
+        lines.append("Run `fs setup <profile>` to initialize submodules and CMake-managed external repositories.")
     elif dirty:
         lines.append("Dirty dependencies are allowed, but reduce build reproducibility.")
     elif not verbose:
