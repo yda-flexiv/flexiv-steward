@@ -8,6 +8,8 @@ fs --project ~/ws/flexiv_sw/v4.x_develop context
 fs context --json
 fs wt doctor
 fs wt sync RemoveSync2 --dry-run
+fs builds
+fs builds gui RelWithDebInfo
 fs build all --configure
 fs build rca --target RobotControlApp
 fs test workflow --dry-run
@@ -24,3 +26,9 @@ uploads transcripts or writes them into the repository.
 `fs wt sync` refuses dirty worktrees, fetches the base ref, and merges it. If
 Git reports conflicts, it leaves the merge in place and prints the conflicted
 files plus the commands to resolve or abort it.
+
+`fs builds` inventories the primary CMake caches under `flexiv/build` and
+reports an exact preset only when its recorded cache variables match; otherwise
+it identifies the build as custom/modified and shows key cache options. Use
+`fs builds gui` for a numbered terminal selector, or pass a directory/basename
+to open that configured cache directly in `cmake-gui`.

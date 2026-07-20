@@ -7,6 +7,7 @@ import json
 import sys
 
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
+from flexiv_steward.builds import build_json, cmake_gui_command, format_builds, list_builds, open_cmake_gui, select_build
 from flexiv_steward.context import ProjectError, collect_context, format_context
 from flexiv_steward.context import discover_project
 from flexiv_steward.sessions import SOURCES, format_handoff, handoff
@@ -63,6 +64,21 @@ def _worktree_sync_command(args: argparse.Namespace) -> int:
     return 0 if result.state in {"synced", "dry-run"} else 1
 
 
+def _build_list_command(args: argparse.Namespace) -> int:
+    builds = list_builds(discover_project(args.project))
+    if args.json:
+        print(json.dumps(build_json(builds), indent=2, sort_keys=True))
+    else:
+        print(format_builds(builds))
+    return 0
+
+
+def _build_gui_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    build = select_build(list_builds(project), args.directory)
+    return open_cmake_gui(project, build, args.dry_run)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -80,6 +96,14 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--base", default="origin/v4.x_develop", help="base ref to fetch and merge")
     sync.add_argument("--dry-run", action="store_true", help="print commands without fetching or merging")
     sync.set_defaults(handler=_worktree_sync_command)
+    builds = subcommands.add_parser("builds", help="list configured CMake build directories")
+    builds.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    builds.set_defaults(handler=_build_list_command)
+    build_commands = builds.add_subparsers(dest="builds_command")
+    gui = build_commands.add_parser("gui", help="select a build directory and open it in cmake-gui")
+    gui.add_argument("directory", nargs="?", help="relative build directory or unique basename")
+    gui.add_argument("--dry-run", action="store_true", help="print the cmake-gui command without opening it")
+    gui.set_defaults(handler=_build_gui_command)
     build = subcommands.add_parser("build", help="configure and build a Docker/CMake profile")
     build.add_argument("profile", nargs="?", default="all", help="all, rca, ui, debug, or yocto-all")
     build.add_argument("--preset", help="use a CMake preset instead of a named profile")
