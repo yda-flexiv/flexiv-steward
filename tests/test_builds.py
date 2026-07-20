@@ -14,13 +14,14 @@ class BuildInventoryTests(unittest.TestCase):
         preset_file.parent.mkdir(parents=True)
         preset_file.write_text(
             '{"configurePresets": [{"name": "ubuntu-debug", "binaryDir": "${sourceDir}/build/Linux/Debug", '
-            '"cacheVariables": {"CMAKE_BUILD_TYPE": "Debug"}}]}'
+            '"cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "THIRDPARTY_PATH": "$env{thirdparty_path}"}}]}'
         )
         cache = self.project / "flexiv" / "build" / "Linux" / "Debug" / "CMakeCache.txt"
         cache.parent.mkdir(parents=True)
         cache.write_text(
             "CMAKE_BUILD_TYPE:STRING=Debug\n"
             "CMAKE_GENERATOR:INTERNAL=Ninja\n"
+            "THIRDPARTY_PATH:PATH=/any/host/specific/path\n"
             f"CMAKE_HOME_DIRECTORY:INTERNAL={self.project / 'flexiv'}\n"
         )
 

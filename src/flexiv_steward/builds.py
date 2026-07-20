@@ -80,8 +80,9 @@ def _matching_presets(project: Path, directory: Path, cache: dict[str, str]) -> 
         compatible = True
         for key, value in variables.items():
             actual = cache.get(key)
-            expected = str(value).upper()
-            if actual is None or "$env{" in expected:
+            raw_expected = str(value)
+            expected = raw_expected.upper()
+            if actual is None or "$env{" in raw_expected:
                 continue
             if actual.upper() != expected:
                 compatible = False
