@@ -7,6 +7,7 @@ test, and agent-handoff workflows.
 fs --project ~/ws/flexiv_sw/v4.x_develop context
 fs context --json
 fs wt doctor
+fs wt sync RemoveSync2 --dry-run
 fs build all --configure
 fs build rca --target RobotControlApp
 fs test workflow --dry-run
@@ -19,3 +20,7 @@ All read-only commands discover the enclosing Git worktree by default. Use
 `fs session handoff` reads local Codex, OpenCode, Cursor, and Copilot records
 only for the selected worktree. It prints a bounded, redacted summary; it never
 uploads transcripts or writes them into the repository.
+
+`fs wt sync` refuses dirty worktrees, fetches the base ref, and merges it. If
+Git reports conflicts, it leaves the merge in place and prints the conflicted
+files plus the commands to resolve or abort it.

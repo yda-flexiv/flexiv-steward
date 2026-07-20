@@ -10,6 +10,7 @@ from flexiv_steward.build import build_command, configure_command, resolve_profi
 from flexiv_steward.context import ProjectError, collect_context, format_context
 from flexiv_steward.context import discover_project
 from flexiv_steward.sessions import SOURCES, format_handoff, handoff
+from flexiv_steward.sync import format_sync, sync_worktree
 from flexiv_steward.worktree import format_worktree_doctor, inspect_worktrees
 
 
@@ -56,6 +57,12 @@ def _session_handoff_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _worktree_sync_command(args: argparse.Namespace) -> int:
+    result = sync_worktree(discover_project(args.project), args.worktree, args.base, args.dry_run)
+    print(format_sync(result))
+    return 0 if result.state in {"synced", "dry-run"} else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -68,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = worktree_commands.add_parser("doctor", help="report dirty, locked, and prunable worktrees")
     doctor.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     doctor.set_defaults(handler=_worktree_doctor_command)
+    sync = worktree_commands.add_parser("sync", help="fetch and merge a base branch into one clean worktree")
+    sync.add_argument("worktree", help="worktree directory name or absolute path")
+    sync.add_argument("--base", default="origin/v4.x_develop", help="base ref to fetch and merge")
+    sync.add_argument("--dry-run", action="store_true", help="print commands without fetching or merging")
+    sync.set_defaults(handler=_worktree_sync_command)
     build = subcommands.add_parser("build", help="configure and build a Docker/CMake profile")
     build.add_argument("profile", nargs="?", default="all", help="all, rca, ui, debug, or yocto-all")
     build.add_argument("--preset", help="use a CMake preset instead of a named profile")
