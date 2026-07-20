@@ -9,6 +9,7 @@ import sys
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
 from flexiv_steward.context import ProjectError, collect_context, format_context
 from flexiv_steward.context import discover_project
+from flexiv_steward.sessions import SOURCES, format_handoff, handoff
 from flexiv_steward.worktree import format_worktree_doctor, inspect_worktrees
 
 
@@ -45,6 +46,16 @@ def _test_workflow_command(args: argparse.Namespace) -> int:
     return run_command(workflow_test_command(project), project, args.dry_run)
 
 
+def _session_handoff_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    data = handoff(project, args.days, args.source or SOURCES, args.limit)
+    if args.json:
+        print(json.dumps(data, indent=2, sort_keys=True))
+    else:
+        print(format_handoff(data))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -69,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     workflow = test_commands.add_parser("workflow", help="run the WorkflowTest integration runner")
     workflow.add_argument("--dry-run", action="store_true", help="print the command without executing it")
     workflow.set_defaults(handler=_test_workflow_command)
+    session = subcommands.add_parser("session", help="summarize local agent work for the current worktree")
+    session_commands = session.add_subparsers(dest="session_command", required=True)
+    handoff_parser = session_commands.add_parser("handoff", help="create a redacted continuation brief")
+    handoff_parser.add_argument("--days", type=int, default=7, help="look back this many days (default: 7)")
+    handoff_parser.add_argument("--limit", type=int, default=8, help="maximum sessions to include (default: 8)")
+    handoff_parser.add_argument("--source", action="append", choices=SOURCES, help="include only this source; may repeat")
+    handoff_parser.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    handoff_parser.set_defaults(handler=_session_handoff_command)
     return parser
 
 
