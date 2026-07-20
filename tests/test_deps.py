@@ -25,8 +25,13 @@ class DependencyTests(unittest.TestCase):
 
     def test_marks_only_version_drift_as_strict_error(self) -> None:
         statuses = [
-            DependencyStatus("proto", "/tmp/proto", "1bc", "222", "mismatch"),
-            DependencyStatus("base", "/tmp/base", "abc", "abc", "ok", dirty=True),
+            DependencyStatus("external", "proto", "/tmp/proto", "1bc", "222", "mismatch"),
+            DependencyStatus("external", "base", "/tmp/base", "abc", "abc", "ok", dirty=True),
         ]
         self.assertTrue(has_dependency_errors(statuses))
         self.assertIn("Do not build", format_dependency_doctor(statuses))
+
+    def test_compacts_clean_output_unless_verbose(self) -> None:
+        statuses = [DependencyStatus("submodule", "proto", "/tmp/proto", "abc", "abc", "ok")]
+        self.assertNotIn("DEPENDENCY", format_dependency_doctor(statuses))
+        self.assertIn("DEPENDENCY", format_dependency_doctor(statuses, verbose=True))

@@ -90,7 +90,7 @@ def _dependency_doctor_command(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(dependency_json(statuses), indent=2, sort_keys=True))
     else:
-        print(format_dependency_doctor(statuses))
+        print(format_dependency_doctor(statuses, args.verbose))
     return 1 if args.strict and has_dependency_errors(statuses) else 0
 
 
@@ -123,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     dependency_commands = dependencies.add_subparsers(dest="dependency_command", required=True)
     dependency_doctor_parser = dependency_commands.add_parser("doctor", help="compare checked-out dependencies with declared revisions")
     dependency_doctor_parser.add_argument("--strict", action="store_true", help="exit nonzero for missing or mismatched revisions")
+    dependency_doctor_parser.add_argument("--verbose", action="store_true", help="show every checked dependency revision")
     dependency_doctor_parser.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     dependency_doctor_parser.set_defaults(handler=_dependency_doctor_command)
     build = subcommands.add_parser("build", help="configure and build a Docker/CMake profile")
