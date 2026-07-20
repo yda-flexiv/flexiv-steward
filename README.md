@@ -10,6 +10,7 @@ fs wt doctor
 fs wt sync RemoveSync2 --dry-run
 fs builds
 fs builds gui RelWithDebInfo
+fs deps doctor --strict
 fs build all --configure
 fs build rca --target RobotControlApp
 fs test workflow --dry-run
@@ -32,3 +33,9 @@ reports an exact preset only when its recorded cache variables match; otherwise
 it identifies the build as custom/modified and shows key cache options. Use
 `fs builds gui` for a numbered terminal selector, or pass a directory/basename
 to open that configured cache directly in `cmake-gui`.
+
+`fs deps doctor` compares direct external repositories (including
+`external/proto`) with the `GIT_TAG` declared in the top-level CMake project,
+and checks every recursive Git submodule. Use `--strict` in an agent or build
+preflight to fail on missing or mismatched revisions. `fs build` runs the same
+version check by default; `--skip-deps-check` is an explicit escape hatch.
