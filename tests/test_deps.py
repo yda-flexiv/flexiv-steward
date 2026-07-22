@@ -29,7 +29,9 @@ class DependencyTests(unittest.TestCase):
             DependencyStatus("external", "base", "/tmp/base", "abc", "abc", "ok", dirty=True),
         ]
         self.assertTrue(has_dependency_errors(statuses))
-        self.assertIn("Do not build", format_dependency_doctor(statuses))
+        output = format_dependency_doctor(statuses)
+        self.assertIn("Do not build", output)
+        self.assertIn("fs setup <profile>", output)
 
     def test_compacts_clean_output_unless_verbose(self) -> None:
         statuses = [DependencyStatus("submodule", "proto", "/tmp/proto", "abc", "abc", "ok")]

@@ -109,7 +109,11 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
         )
     lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
     if errors:
-        lines.append("Do not build until mismatches are corrected; re-run CMake after restoring the declared revision.")
+        lines.append(
+            "Do not build until mismatches are corrected. Run `fs setup <profile>` "
+            "(for example, `fs setup rca`) to reconfigure and restore CMake-managed externals, "
+            "then re-run the build."
+        )
     elif bootstrap:
         lines.append("Run `fs setup <profile>` to initialize submodules and CMake-managed external repositories.")
     elif dirty:
