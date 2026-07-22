@@ -15,11 +15,19 @@ class BuildTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def test_all_profile_uses_ubuntu_dispatcher(self) -> None:
+    def test_all_profile_uses_ubuntu_execution_container(self) -> None:
         profile = resolve_profile("all")
         self.assertEqual(
             build_command(self.project, profile, ["RobotControlApp"]),
-            ["bash", "docker/docker_dispatch.sh", "build", "ubuntu", "ubuntu-relwithdebinfo-g1-All", "RobotControlApp"],
+            [
+                "bash",
+                "docker/docker_dispatch.sh",
+                "exec",
+                "ubuntu",
+                "bash",
+                "-c",
+                "cd flexiv && cmake --build --preset ubuntu-relwithdebinfo-g1-All --target RobotControlApp",
+            ],
         )
         self.assertIn("cmake --preset ubuntu-relwithdebinfo-g1-All", configure_command(self.project, profile)[-1])
 
@@ -31,6 +39,11 @@ class BuildTests(unittest.TestCase):
         profile = resolve_profile("custom", "debug; echo unsafe")
         shell_command = configure_command(self.project, profile)[-1]
         self.assertIn("cmake --preset 'debug; echo unsafe'", shell_command)
+
+    def test_build_targets_are_quoted_for_the_shell(self) -> None:
+        profile = resolve_profile("all")
+        shell_command = build_command(self.project, profile, ["unsafe; echo nope"])[-1]
+        self.assertIn("--target 'unsafe; echo nope'", shell_command)
 
     def test_workflow_test_is_project_local(self) -> None:
         script = self.project / "flexiv" / "tool" / "WorkflowTest" / "run_workflow_test.sh"

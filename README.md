@@ -47,3 +47,7 @@ version check by default; `--skip-deps-check` is an explicit escape hatch. Add
 For a newly created worktree, use `fs setup rca` (or another profile). It
 initializes recursive submodules, runs CMake configure so declared externals
 are checked out, and then verifies all dependency revisions.
+
+Both configure and build run through `docker/docker_dispatch.sh exec <platform>
+bash -c`, from the container's `flexiv` directory. This keeps CMake configure
+and incremental builds in the same Docker environment.

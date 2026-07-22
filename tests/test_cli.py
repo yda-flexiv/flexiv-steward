@@ -65,4 +65,4 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         commands = [shlex.split(line.removeprefix("$ ")) for line in stdout.splitlines()]
         self.assertEqual(commands[0][-1], "cd flexiv && cmake --preset 'debug; echo unsafe'")
-        self.assertEqual(commands[1][-1], "debug; echo unsafe")
+        self.assertEqual(commands[1][-1], "cd flexiv && cmake --build --preset 'debug; echo unsafe'")

@@ -60,9 +60,18 @@ def configure_command(project: Path, profile: BuildProfile) -> list[str]:
 
 
 def build_command(project: Path, profile: BuildProfile, targets: list[str]) -> list[str]:
-    """Build the dispatcher command for an incremental CMake build."""
+    """Build an incremental CMake preset in the Docker execution container."""
     _dispatcher(project)
-    return ["bash", "docker/docker_dispatch.sh", "build", profile.platform, profile.preset, *targets]
+    target_args = " ".join(f"--target {shlex.quote(target)}" for target in targets)
+    return [
+        "bash",
+        "docker/docker_dispatch.sh",
+        "exec",
+        profile.platform,
+        "bash",
+        "-c",
+        f"cd flexiv && cmake --build --preset {shlex.quote(profile.preset)} {target_args}".rstrip(),
+    ]
 
 
 def workflow_test_command(project: Path) -> list[str]:
