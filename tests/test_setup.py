@@ -37,7 +37,7 @@ class SetupTests(unittest.TestCase):
 
             self.assertIn("docker/docker_dispatch.sh", run_command.call_args.args[0])
 
-    def test_creates_compile_database_symlink_and_projectile_marker(self) -> None:
+    def test_creates_clangd_database_and_projectile_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             project = Path(tempdir)
             source = project / "flexiv" / "build" / "Linux" / "RelWithDebInfo" / "compile_commands.json"
@@ -48,11 +48,19 @@ class SetupTests(unittest.TestCase):
                 {"name": "base", "binaryDir": "${sourceDir}/build/Linux/RelWithDebInfo"},
                 {"name": "rca", "inherits": "base"},
             ]}))
+            rewrite = project / "docker" / "rewrite_compile_commands_for_clangd.sh"
+            rewrite.parent.mkdir()
+            rewrite.write_text("#!/bin/bash\n"
+                               "repo=$(dirname \"$(dirname \"$0\")\")\n"
+                               "cp \"$FLEXIV_CLANGD_DB_IN\" \"$repo/flexiv/compile_commands.json\"\n")
+            rewrite.chmod(0o755)
 
             configure_editor_files(project, "rca")
 
+            host_database = project / "flexiv" / "compile_commands.json"
+            self.assertTrue(host_database.is_file())
             database = project / "compile_commands.json"
             self.assertTrue(database.is_symlink())
-            self.assertEqual(database.resolve(), source)
+            self.assertEqual(database.resolve(), host_database)
             self.assertTrue((project / ".projectile").is_file())
             self.assertEqual((project / ".projectile").read_text(), "")

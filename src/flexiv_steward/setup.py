@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from pathlib import Path
@@ -50,18 +51,28 @@ def compile_commands_source(project: Path, preset_name: str) -> Path:
 
 
 def configure_editor_files(project: Path, preset_name: str) -> None:
-    """Expose CMake's compile database and mark the worktree for Projectile."""
+    """Expose CMake's compile database for clangd and mark the worktree for Projectile."""
     source = compile_commands_source(project, preset_name)
     if not source.is_file():
         raise ProjectError(f"compile database was not generated: {source}")
+    rewrite = project / "docker" / "rewrite_compile_commands_for_clangd.sh"
+    if not rewrite.is_file():
+        raise ProjectError(f"clangd database rewriter is missing: {rewrite}")
+    environment = dict(os.environ, FLEXIV_CLANGD_DB_IN=str(source))
+    result = subprocess.run(["bash", str(rewrite)], cwd=project, env=environment, check=False)
+    if result.returncode:
+        raise ProjectError("failed to rewrite compile database for clangd")
+    host_database = project / "flexiv" / "compile_commands.json"
+    if not host_database.is_file():
+        raise ProjectError(f"clangd database was not produced: {host_database}")
     destination = project / "compile_commands.json"
     if destination.is_symlink():
         destination.unlink()
     elif destination.exists():
         raise ProjectError(f"refusing to replace existing file: {destination}")
-    destination.symlink_to(source)
+    destination.symlink_to("flexiv/compile_commands.json")
     (project / ".projectile").touch(exist_ok=True)
-    print(f"Linked compile_commands.json to {source}.")
+    print(f"Linked compile_commands.json to {host_database}.")
     print("Created .projectile.")
 
 
@@ -79,7 +90,8 @@ def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
         ]
         for command in [submodule_command(), configure]:
             print("$ " + shlex.join(command))
-        print("$ ln -s <preset-build>/compile_commands.json compile_commands.json")
+        print("$ FLEXIV_CLANGD_DB_IN=<preset-build>/compile_commands.json bash docker/rewrite_compile_commands_for_clangd.sh")
+        print("$ ln -s flexiv/compile_commands.json compile_commands.json")
         print("$ touch .projectile")
         print("$ fs deps doctor --strict")
         return 0
