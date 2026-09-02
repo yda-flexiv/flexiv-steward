@@ -34,7 +34,7 @@ class CliTests(unittest.TestCase):
     def test_help_and_parser_errors_have_cli_exit_codes(self) -> None:
         code, stdout, stderr = self._invoke("--help")
         self.assertEqual(code, 0)
-        self.assertIn("{context,wt,builds,deps,build,setup,test,session}", stdout)
+        self.assertIn("{context,wt,builds,deps,build,setup,test,session,branchdiff}", stdout)
         self.assertEqual(stderr, "")
 
         code, stdout, stderr = self._invoke("--not-an-option")

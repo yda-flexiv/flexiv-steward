@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 
+from flexiv_steward.branchdiff import _branchdiff_command
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
 from flexiv_steward.builds import build_json, cmake_gui_command, format_builds, list_builds, open_cmake_gui, select_build
 from flexiv_steward.context import ProjectError, collect_context, format_context
@@ -159,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_parser.add_argument("--source", action="append", choices=SOURCES, help="include only this source; may repeat")
     handoff_parser.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     handoff_parser.set_defaults(handler=_session_handoff_command)
+    branchdiff = subcommands.add_parser("branchdiff", help="serve a web UI comparing two branches")
+    branchdiff.add_argument("branch_a", help="base branch or ref")
+    branchdiff.add_argument("branch_b", nargs="?", default="HEAD", help="target branch or ref (default: HEAD)")
+    branchdiff.add_argument("--port", type=int, default=9876, help="HTTP server port (default: 9876)")
+    branchdiff.add_argument("--no-browser", action="store_true", help="do not open the browser automatically")
+    branchdiff.set_defaults(handler=_branchdiff_command)
     return parser
 
 
