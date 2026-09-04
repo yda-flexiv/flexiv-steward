@@ -208,7 +208,12 @@ def configure_editor_files(project: Path, preset_name: str) -> None:
             raise ProjectError(f"refusing to replace existing file: {destination}")
         destination.symlink_to(host_database.relative_to(project))
     (project / ".projectile").touch(exist_ok=True)
-    print(f"Linked compile_commands.json to {host_database}.")
+    action = (
+        "Linked compile_commands.json to"
+        if destination != host_database
+        else "Prepared compile_commands.json at"
+    )
+    print(f"{action} {host_database}.")
     print("Created .projectile.")
 
 
@@ -245,12 +250,13 @@ def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
         return result
     # The dispatcher itself lives in the docker submodule, so construct the
     # configure command only after recursive submodules have been populated.
+    preset = profile_preset(project, profile)
     configure = configure_command(project, profile)
-    print(f"Configuring {profile.name} ({profile.preset})…")
+    print(f"Configuring {profile.name} ({preset})…")
     result = run_command(configure, project, dry_run=False)
     if result:
         return result
-    configure_editor_files(project, profile_preset(project, profile))
+    configure_editor_files(project, preset)
     statuses = dependency_doctor(project)
     print(format_dependency_doctor(statuses))
     if has_dependency_errors(statuses):

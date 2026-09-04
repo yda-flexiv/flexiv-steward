@@ -29,9 +29,10 @@ uploads transcripts or writes them into the repository.
 Git reports conflicts, it leaves the merge in place and prints the conflicted
 files plus the commands to resolve or abort it.
 
-`fs builds` inventories the primary CMake caches under `flexiv/build` and
-reports an exact preset only when its recorded cache variables match; otherwise
-it identifies the build as custom/modified and shows key cache options. Use
+`fs builds` inventories the primary CMake caches under the source tree's `build`
+directory and reports an exact preset only when its recorded cache variables
+match; otherwise it identifies the build as custom/modified and shows key cache
+options. Use
 `fs builds gui` for a numbered terminal selector, or pass a directory/basename
 to open that configured cache directly in `cmake-gui`.
 `fs builds gui --dry-run` prints its command even when `cmake-gui` is not
@@ -54,5 +55,8 @@ later `fs setup` can use it with `git submodule update --reference` without
 depending on any long-lived checkout.
 
 Both configure and build run through `docker/docker_dispatch.sh exec <platform>
-bash -c`, from the container's `flexiv` directory. This keeps CMake configure
-and incremental builds in the same Docker environment.
+bash -c`, from the CMake source directory. Steward detects both the `flexiv_sw`
+wrapper layout (source under `flexiv/`) and a direct `flexiv_sw_base` worktree
+(source at the repository root). In a direct base worktree, the `all` and
+`yocto-all` profiles select the corresponding `*-relwithdebinfo-g1` presets.
+This keeps CMake configure and incremental builds in the same Docker environment.
