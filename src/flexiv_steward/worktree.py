@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,38 +41,96 @@ def parse_worktree_porcelain(output: str) -> list[dict[str, Any]]:
     return worktrees
 
 
+def _porcelain_paths(output: str) -> list[str]:
+    """Return one current path per NUL-delimited porcelain status entry."""
+    paths: list[str] = []
+    records = output.split("\0")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        if len(record) < 4:
+            index += 1
+            continue
+        state = record[:2]
+        paths.append(record[3:])
+        index += 2 if "R" in state or "C" in state else 1
+    return paths
+
+
+def _last_activity(path: Path, status_output: str) -> tuple[str | None, str | None]:
+    """Return the latest Git or changed-file activity as UTC ISO time."""
+    candidates: list[tuple[float, str]] = []
+    try:
+        reflog_time = run_git(path, "reflog", "show", "-1", "--format=%ct", "HEAD")
+        if reflog_time:
+            candidates.append((float(reflog_time), "reflog"))
+    except (ProjectError, ValueError):
+        pass
+    for relative_path in _porcelain_paths(status_output):
+        try:
+            candidates.append(((path / relative_path).stat().st_mtime, "working-tree"))
+        except OSError:
+            pass
+    if not candidates:
+        try:
+            candidates.append((path.stat().st_mtime, "directory"))
+        except OSError:
+            return None, None
+    timestamp, source = max(candidates)
+    activity = datetime.fromtimestamp(timestamp, timezone.utc).isoformat(timespec="seconds")
+    return activity, source
+
+
+def _inspect_worktree(worktree: dict[str, Any]) -> dict[str, Any]:
+    """Add status and activity metadata to one parsed worktree."""
+    worktree = dict(worktree)
+    path = Path(worktree["path"])
+    worktree["exists"] = path.is_dir()
+    worktree["changes"] = None
+    worktree["last_activity"] = None
+    worktree["last_activity_source"] = None
+    if path.is_dir() and not worktree["prunable"]:
+        status_output = ""
+        try:
+            status_output = run_git(path, "status", "--porcelain=v1", "-z")
+            worktree["changes"] = len(_porcelain_paths(status_output))
+        except ProjectError:
+            worktree["changes"] = None
+        activity, source = _last_activity(path, status_output)
+        worktree["last_activity"] = activity
+        worktree["last_activity_source"] = source
+    issues = []
+    if worktree["prunable"] or not worktree["exists"]:
+        issues.append("prunable")
+    if worktree["locked"]:
+        issues.append("locked")
+    if worktree["changes"]:
+        issues.append("dirty")
+    worktree["issues"] = issues
+    return worktree
+
+
 def inspect_worktrees(project: str | Path) -> list[dict[str, Any]]:
     """Return status and safety signals for every worktree in the repository."""
     project_path = Path(project)
     worktrees = parse_worktree_porcelain(run_git(project_path, "worktree", "list", "--porcelain"))
-    for worktree in worktrees:
-        path = Path(worktree["path"])
-        worktree["exists"] = path.is_dir()
-        worktree["changes"] = None
-        if path.is_dir() and not worktree["prunable"]:
-            try:
-                worktree["changes"] = len(run_git(path, "status", "--porcelain").splitlines())
-            except ProjectError:
-                worktree["changes"] = None
-        issues = []
-        if worktree["prunable"] or not worktree["exists"]:
-            issues.append("prunable")
-        if worktree["locked"]:
-            issues.append("locked")
-        if worktree["changes"]:
-            issues.append("dirty")
-        worktree["issues"] = issues
-    return worktrees
+    worker_count = min(8, len(worktrees))
+    if not worker_count:
+        return []
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return list(executor.map(_inspect_worktree, worktrees))
 
 
 def format_worktree_doctor(worktrees: list[dict[str, Any]]) -> str:
     """Render worktree health in a compact, actionable table."""
-    lines = ["STATE     CHANGES  BRANCH                         PATH"]
+    lines = ["STATE     CHANGES  LAST ACTIVE       BRANCH                         PATH"]
     for worktree in worktrees:
         state = ",".join(worktree["issues"]) or "healthy"
         changes = "?" if worktree["changes"] is None else str(worktree["changes"])
         branch = worktree["branch"] or ("detached" if worktree["detached"] else "-")
-        lines.append(f"{state:<9} {changes:<8} {branch:<30} {worktree['path']}")
+        activity = worktree.get("last_activity")
+        active = datetime.fromisoformat(activity).astimezone().strftime("%Y-%m-%d %H:%M") if activity else "-"
+        lines.append(f"{state:<9} {changes:<8} {active:<17} {branch:<30} {worktree['path']}")
     problem_count = sum(bool(worktree["issues"]) for worktree in worktrees)
     lines.append(f"\n{len(worktrees)} worktrees; {problem_count} need attention.")
     if any(worktree["prunable"] for worktree in worktrees):

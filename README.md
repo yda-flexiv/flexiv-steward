@@ -29,6 +29,10 @@ uploads transcripts or writes them into the repository.
 Git reports conflicts, it leaves the merge in place and prints the conflicted
 files plus the commands to resolve or abort it.
 
+`fs wt doctor` reports each worktree's last active time using its latest HEAD
+reflog entry or newer uncommitted-file modification. It does not traverse
+ignored build outputs.
+
 `fs builds` inventories the primary CMake caches under the source tree's `build`
 directory and reports an exact preset only when its recorded cache variables
 match; otherwise it identifies the build as custom/modified and shows key cache
