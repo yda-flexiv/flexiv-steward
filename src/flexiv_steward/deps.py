@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from flexiv_steward.context import run_git
+from flexiv_steward.layout import source_root
 
 
 @dataclass(frozen=True)
@@ -28,7 +29,8 @@ _SOURCE = re.compile(r"\bSOURCE_DIR\s+\$\{CMAKE_SOURCE_DIR\}/(?P<path>[^\s)]+)")
 
 def declared_externals(project: Path) -> list[tuple[str, Path, str]]:
     """Read direct external dependencies declared by the top-level CMake project."""
-    cmake = project / "flexiv" / "CMakeLists.txt"
+    source_dir = source_root(project)
+    cmake = source_dir / "CMakeLists.txt"
     if not cmake.is_file():
         return []
     declared = []
@@ -36,7 +38,7 @@ def declared_externals(project: Path) -> list[tuple[str, Path, str]]:
         tag = _TAG.search(match["body"])
         source = _SOURCE.search(match["body"])
         if tag and source:
-            declared.append((match["name"], project / "flexiv" / source["path"], tag["tag"]))
+            declared.append((match["name"], source_dir / source["path"], tag["tag"]))
     return declared
 
 

@@ -48,6 +48,11 @@ For a newly created worktree, use `fs setup rca` (or another profile). It
 initializes recursive submodules, runs CMake configure so declared externals
 are checked out, and then verifies all dependency revisions.
 
+Submodule objects are cached below the superproject's common Git directory at
+`flexiv-steward/submodules`. The cache survives linked-worktree removal, so a
+later `fs setup` can use it with `git submodule update --reference` without
+depending on any long-lived checkout.
+
 Both configure and build run through `docker/docker_dispatch.sh exec <platform>
 bash -c`, from the container's `flexiv` directory. This keeps CMake configure
 and incremental builds in the same Docker environment.

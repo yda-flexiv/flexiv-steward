@@ -56,6 +56,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("Project:", stdout)
 
     def test_build_dry_run_preserves_nested_routing_and_shell_quoting(self) -> None:
+        (self.project / "flexiv").mkdir()
         (self.project / "docker").mkdir()
         (self.project / "docker" / "docker_dispatch.sh").touch()
         code, stdout, stderr = self._invoke(

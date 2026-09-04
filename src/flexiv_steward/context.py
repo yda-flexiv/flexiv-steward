@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from flexiv_steward.layout import source_root
+
 
 class ProjectError(RuntimeError):
     """The requested directory is not a Git worktree."""
@@ -107,7 +109,7 @@ def _submodules(project: Path) -> list[dict[str, Any]]:
 
 
 def _presets(project: Path) -> list[str]:
-    preset_file = project / "flexiv" / "CMakePresets.json"
+    preset_file = source_root(project) / "CMakePresets.json"
     if not preset_file.is_file():
         return []
     try:
@@ -136,9 +138,14 @@ def _nested_repo(path: Path, name: str) -> dict[str, Any] | None:
 def collect_context(path: str | Path | None = None) -> dict[str, Any]:
     """Collect a compact, read-only snapshot of a Flexiv worktree."""
     project = discover_project(path)
+    source_dir = source_root(project)
     status = _status(project)
     compile_database = project / "compile_commands.json"
-    nested = _nested_repo(project / "flexiv" / "external" / "flexiv_sw_base", "flexiv_sw_base")
+    nested = (
+        _nested_repo(source_dir / "external" / "flexiv_sw_base", "flexiv_sw_base")
+        if source_dir != project
+        else None
+    )
     return {
         "project": str(project),
         "head": run_git(project, "rev-parse", "--short", "HEAD"),
@@ -146,7 +153,7 @@ def collect_context(path: str | Path | None = None) -> dict[str, Any]:
         "submodules": _submodules(project),
         "nested_repositories": [nested] if nested else [],
         "cmake": {
-            "preset_file": str(project / "flexiv" / "CMakePresets.json"),
+            "preset_file": str(source_dir / "CMakePresets.json"),
             "presets": _presets(project),
             "compile_commands": {
                 "path": str(compile_database),

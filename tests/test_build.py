@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from flexiv_steward.build import build_command, configure_command, resolve_profile, workflow_test_command
@@ -9,6 +10,7 @@ class BuildTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.project = Path(self.tempdir.name)
+        (self.project / "flexiv").mkdir()
         (self.project / "docker").mkdir()
         (self.project / "docker" / "docker_dispatch.sh").touch()
 
@@ -50,3 +52,16 @@ class BuildTests(unittest.TestCase):
         script.parent.mkdir(parents=True)
         script.touch()
         self.assertEqual(workflow_test_command(self.project), ["bash", str(script)])
+
+    def test_direct_source_layout_uses_root_and_base_all_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project = Path(tempdir)
+            (project / "docker").mkdir()
+            (project / "docker" / "docker_dispatch.sh").touch()
+            (project / "CMakePresets.json").write_text(json.dumps({
+                "configurePresets": [{"name": "ubuntu-relwithdebinfo-g1"}],
+            }))
+
+            command = configure_command(project, resolve_profile("all"))
+
+            self.assertEqual(command[-1], "cmake --preset ubuntu-relwithdebinfo-g1")

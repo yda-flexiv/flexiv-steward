@@ -68,3 +68,13 @@ class ContextTests(unittest.TestCase):
         self.assertIn("Docker: ", rendered)
         self.assertIn("1 uncommitted entries:  M Dockerfile; 2 unpushed", rendered)
         self.assertIn("Nested: flexiv_sw_base", rendered)
+
+    def test_collects_presets_from_direct_source_layout(self) -> None:
+        (self.project / "CMakePresets.json").write_text(
+            '{"configurePresets": [{"name": "ubuntu-relwithdebinfo-g1"}]}'
+        )
+
+        context = collect_context(self.project)
+
+        self.assertEqual(context["cmake"]["presets"], ["ubuntu-relwithdebinfo-g1"])
+        self.assertEqual(context["cmake"]["preset_file"], str(self.project / "CMakePresets.json"))

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from flexiv_steward.context import ProjectError
+from flexiv_steward.layout import source_root
 
 
 @dataclass(frozen=True)
@@ -36,7 +37,7 @@ def _read_cache(path: Path) -> dict[str, str]:
 
 
 def _resolved_presets(project: Path) -> list[dict[str, Any]]:
-    preset_file = project / "flexiv" / "CMakePresets.json"
+    preset_file = source_root(project) / "CMakePresets.json"
     if not preset_file.is_file():
         return []
     try:
@@ -72,8 +73,9 @@ def _resolved_presets(project: Path) -> list[dict[str, Any]]:
 
 def _matching_presets(project: Path, directory: Path, cache: dict[str, str]) -> list[str]:
     matches: list[tuple[int, str]] = []
+    source_dir = source_root(project)
     for preset in _resolved_presets(project):
-        binary_dir = preset.get("binaryDir", "").replace("${sourceDir}", str(project / "flexiv"))
+        binary_dir = preset.get("binaryDir", "").replace("${sourceDir}", str(source_dir))
         if Path(binary_dir) != directory:
             continue
         variables = preset.get("cacheVariables", {})
@@ -100,7 +102,8 @@ def _matching_presets(project: Path, directory: Path, cache: dict[str, str]) -> 
 
 def list_builds(project: Path) -> list[BuildDirectory]:
     """Find primary Flexiv CMake build directories and their likely presets."""
-    build_root = project / "flexiv" / "build"
+    source_dir = source_root(project)
+    build_root = source_dir / "build"
     if not build_root.is_dir():
         return []
     builds = []
@@ -110,7 +113,7 @@ def list_builds(project: Path) -> list[BuildDirectory]:
         builds.append(
             BuildDirectory(
                 directory=str(directory.relative_to(project)),
-                source_directory=cache.get("CMAKE_HOME_DIRECTORY", str(project / "flexiv")),
+                source_directory=cache.get("CMAKE_HOME_DIRECTORY", str(source_dir)),
                 build_type=cache.get("CMAKE_BUILD_TYPE"),
                 generator=cache.get("CMAKE_GENERATOR"),
                 presets=_matching_presets(project, directory, cache),
@@ -133,7 +136,7 @@ def list_builds(project: Path) -> list[BuildDirectory]:
 def format_builds(builds: list[BuildDirectory]) -> str:
     """Render build inventory in a form that is easy to scan in a terminal."""
     if not builds:
-        return "No configured CMake builds found under flexiv/build."
+        return "No configured CMake builds found under the source build directory."
     lines = ["BUILD DIRECTORY                              TYPE             PRESET / CACHE CONFIGURATION"]
     for build in builds:
         preset = ", ".join(build.presets) or "custom or modified"

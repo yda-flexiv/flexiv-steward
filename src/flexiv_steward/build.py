@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from flexiv_steward.context import ProjectError
+from flexiv_steward.layout import source_relative_path, source_root
 
 
 @dataclass(frozen=True)
@@ -45,9 +47,41 @@ def _dispatcher(project: Path) -> Path:
     return dispatcher
 
 
+def profile_preset(project: Path, profile: BuildProfile) -> str:
+    """Return the preset matching *profile* in a wrapper or direct source tree."""
+    preset_file = source_root(project) / "CMakePresets.json"
+    if not preset_file.is_file():
+        return profile.preset
+    try:
+        available = {
+            preset["name"]
+            for preset in json.loads(preset_file.read_text()).get("configurePresets", [])
+        }
+    except (json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ProjectError(f"could not read CMake presets: {preset_file}") from error
+    if profile.preset in available:
+        return profile.preset
+    direct_fallbacks = {
+        "all": "ubuntu-relwithdebinfo-g1",
+        "yocto-all": "yocto-relwithdebinfo-g1",
+    }
+    fallback = direct_fallbacks.get(profile.name)
+    if source_root(project) == project and fallback in available:
+        return fallback
+    return profile.preset
+
+
+def _source_shell_command(project: Path, command: str) -> str:
+    relative = source_relative_path(project)
+    if relative == Path("."):
+        return command
+    return f"cd {shlex.quote(str(relative))} && {command}"
+
+
 def configure_command(project: Path, profile: BuildProfile) -> list[str]:
     """Build the command that configures a CMake preset in the Docker harness."""
     _dispatcher(project)
+    preset = profile_preset(project, profile)
     return [
         "bash",
         "docker/docker_dispatch.sh",
@@ -55,13 +89,14 @@ def configure_command(project: Path, profile: BuildProfile) -> list[str]:
         profile.platform,
         "bash",
         "-c",
-        f"cd flexiv && cmake --preset {shlex.quote(profile.preset)}",
+        _source_shell_command(project, f"cmake --preset {shlex.quote(preset)}"),
     ]
 
 
 def build_command(project: Path, profile: BuildProfile, targets: list[str]) -> list[str]:
     """Build an incremental CMake preset in the Docker execution container."""
     _dispatcher(project)
+    preset = profile_preset(project, profile)
     target_args = " ".join(f"--target {shlex.quote(target)}" for target in targets)
     return [
         "bash",
@@ -70,13 +105,16 @@ def build_command(project: Path, profile: BuildProfile, targets: list[str]) -> l
         profile.platform,
         "bash",
         "-c",
-        f"cd flexiv && cmake --build --preset {shlex.quote(profile.preset)} {target_args}".rstrip(),
+        _source_shell_command(
+            project,
+            f"cmake --build --preset {shlex.quote(preset)} {target_args}".rstrip(),
+        ),
     ]
 
 
 def workflow_test_command(project: Path) -> list[str]:
     """Return the project-local workflow integration test invocation."""
-    script = project / "flexiv" / "tool" / "WorkflowTest" / "run_workflow_test.sh"
+    script = source_root(project) / "tool" / "WorkflowTest" / "run_workflow_test.sh"
     if not script.is_file():
         raise ProjectError(f"workflow test runner is missing: {script}")
     return ["bash", str(script)]

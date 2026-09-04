@@ -37,3 +37,18 @@ class DependencyTests(unittest.TestCase):
         statuses = [DependencyStatus("submodule", "proto", "/tmp/proto", "abc", "abc", "ok")]
         self.assertNotIn("DEPENDENCY", format_dependency_doctor(statuses))
         self.assertIn("DEPENDENCY", format_dependency_doctor(statuses, verbose=True))
+
+    def test_reads_external_from_direct_source_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project = Path(tempdir)
+            (project / "CMakeLists.txt").write_text(
+                "FlexivAddExternal(flexiv_sw_proto\n"
+                "  GIT_TAG 1bcdef0123456789\n"
+                "  SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/proto\n"
+                ")\n"
+            )
+
+            self.assertEqual(
+                declared_externals(project),
+                [("flexiv_sw_proto", project / "external" / "proto", "1bcdef0123456789")],
+            )

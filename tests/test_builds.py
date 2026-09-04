@@ -60,3 +60,19 @@ class BuildInventoryTests(unittest.TestCase):
         build = list_builds(self.project)[0]
         with patch("flexiv_steward.builds.shutil.which", return_value=None):
             self.assertEqual(open_cmake_gui(self.project, build, dry_run=True), 0)
+
+    def test_lists_builds_from_direct_source_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            project = Path(tempdir)
+            (project / "CMakePresets.json").write_text(
+                '{"configurePresets": [{"name": "ubuntu-debug", '
+                '"binaryDir": "${sourceDir}/build/Linux/Debug"}]}'
+            )
+            cache = project / "build" / "Linux" / "Debug" / "CMakeCache.txt"
+            cache.parent.mkdir(parents=True)
+            cache.write_text(f"CMAKE_HOME_DIRECTORY:INTERNAL={project}\n")
+
+            builds = list_builds(project)
+
+            self.assertEqual(builds[0].directory, "build/Linux/Debug")
+            self.assertEqual(builds[0].presets, ["ubuntu-debug"])
