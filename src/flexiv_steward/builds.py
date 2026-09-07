@@ -5,24 +5,14 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
-import subprocess
 import sys
-from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
-from flexiv_steward.context import ProjectError
+from flexiv_steward.errors import ProjectError
 from flexiv_steward.layout import source_root
-
-
-@dataclass(frozen=True)
-class BuildDirectory:
-    directory: str
-    source_directory: str
-    build_type: str | None
-    generator: str | None
-    presets: list[str]
-    options: dict[str, str]
+from flexiv_steward.models import BuildDirectory
+from flexiv_steward.process import run_process
 
 
 def _read_cache(path: Path) -> dict[str, str]:
@@ -116,9 +106,9 @@ def list_builds(project: Path) -> list[BuildDirectory]:
                 source_directory=cache.get("CMAKE_HOME_DIRECTORY", str(source_dir)),
                 build_type=cache.get("CMAKE_BUILD_TYPE"),
                 generator=cache.get("CMAKE_GENERATOR"),
-                presets=_matching_presets(project, directory, cache),
-                options={
-                    label: cache[key]
+                presets=tuple(_matching_presets(project, directory, cache)),
+                options=tuple(
+                    (label, cache[key])
                     for key, label in {
                         "BuildApp_.All": "apps",
                         "BuildTest_.All": "tests",
@@ -127,27 +117,10 @@ def list_builds(project: Path) -> list[BuildDirectory]:
                         "FVR_ENABLE_SANITIZER": "sanitizer",
                     }.items()
                     if key in cache
-                },
+                ),
             )
         )
     return builds
-
-
-def format_builds(builds: list[BuildDirectory]) -> str:
-    """Render build inventory in a form that is easy to scan in a terminal."""
-    if not builds:
-        return "No configured CMake builds found under the source build directory."
-    lines = ["BUILD DIRECTORY                              TYPE             PRESET / CACHE CONFIGURATION"]
-    for build in builds:
-        preset = ", ".join(build.presets) or "custom or modified"
-        options = ", ".join(f"{key}={value}" for key, value in build.options.items())
-        detail = preset if not options else f"{preset}; {options}"
-        lines.append(f"{build.directory:<44} {(build.build_type or '-'): <16} {detail}")
-    return "\n".join(lines)
-
-
-def build_json(builds: list[BuildDirectory]) -> list[dict[str, Any]]:
-    return [asdict(build) for build in builds]
 
 
 def select_build(builds: list[BuildDirectory], directory: str | None) -> BuildDirectory:
@@ -184,4 +157,4 @@ def open_cmake_gui(project: Path, build: BuildDirectory, dry_run: bool) -> int:
         return 0
     if not shutil.which("cmake-gui"):
         raise ProjectError("cmake-gui is not installed or is not on PATH")
-    return subprocess.run(command, cwd=project, check=False).returncode
+    return run_process(command, project, capture_output=False, timeout=None).returncode

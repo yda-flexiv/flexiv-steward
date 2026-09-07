@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from flexiv_steward.sync import SyncResult, _fetch_command, format_sync, sync_worktree
+from flexiv_steward.formatters import format_sync
+from flexiv_steward.models import SyncResult
+from flexiv_steward.sync import _fetch_command, sync_worktree
 
 
 class SyncTests(unittest.TestCase):
@@ -15,7 +17,7 @@ class SyncTests(unittest.TestCase):
             "conflict",
             Path("/tmp/RemoveSync2"),
             "origin/v4.x_develop",
-            ["flexiv/example.cpp"],
+            ("flexiv/example.cpp",),
             "Automatic merge failed.",
         )
         output = format_sync(result)
@@ -48,7 +50,7 @@ class SyncTests(unittest.TestCase):
             result = sync_worktree(project, "feature", "origin/master", dry_run=False)
 
             self.assertEqual(result.state, "conflict")
-            self.assertEqual(result.conflicts, ["shared.txt"])
+            self.assertEqual(result.conflicts, ("shared.txt",))
             self._git(worker, "merge", "--abort")
 
     @staticmethod

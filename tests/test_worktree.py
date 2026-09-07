@@ -5,12 +5,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from flexiv_steward.worktree import (
-    _last_activity,
-    _porcelain_paths,
-    format_worktree_doctor,
-    parse_worktree_porcelain,
-)
+from flexiv_steward.formatters import format_worktree_doctor
+from flexiv_steward.models import WorktreeInfo
+from flexiv_steward.worktree import _last_activity, _porcelain_paths, parse_worktree_porcelain
 
 
 class WorktreeTests(unittest.TestCase):
@@ -24,14 +21,18 @@ HEAD 0123456789abcdef
 detached
 locked maintenance
 prunable stale gitdir
+
+worktree /tmp/bare.git
+bare
 """
         worktrees = parse_worktree_porcelain(output)
-        self.assertEqual(worktrees[0]["path"], "/tmp/main tree")
-        self.assertEqual(worktrees[0]["branch"], "main")
-        self.assertFalse(worktrees[0]["prunable"])
-        self.assertTrue(worktrees[1]["detached"])
-        self.assertEqual(worktrees[1]["locked"], "maintenance")
-        self.assertEqual(worktrees[1]["prunable"], "stale gitdir")
+        self.assertEqual(worktrees[0].path, Path("/tmp/main tree"))
+        self.assertEqual(worktrees[0].branch, "main")
+        self.assertFalse(worktrees[0].prunable)
+        self.assertTrue(worktrees[1].detached)
+        self.assertEqual(worktrees[1].locked, "maintenance")
+        self.assertEqual(worktrees[1].prunable, "stale gitdir")
+        self.assertEqual(len(worktrees), 2)
 
     def test_porcelain_paths_handle_renames_and_embedded_newlines(self) -> None:
         output = " M normal.cpp\0R  renamed.cpp\0old.cpp\0?? line\nbreak.cpp\0"
@@ -50,15 +51,16 @@ prunable stale gitdir
             self.assertEqual(source, "working-tree")
 
     def test_formats_last_activity_column(self) -> None:
-        output = format_worktree_doctor([{
-            "path": "/tmp/main",
-            "branch": "main",
-            "detached": False,
-            "changes": 0,
-            "issues": [],
-            "prunable": False,
-            "last_activity": "2026-09-04T03:02:00+00:00",
-        }])
+        output = format_worktree_doctor((
+            WorktreeInfo(
+                path=Path("/tmp/main"),
+                head="abc",
+                branch="main",
+                exists=True,
+                changes=0,
+                last_activity="2026-09-04T03:02:00+00:00",
+            ),
+        ))
 
         self.assertIn("LAST ACTIVE", output)
         expected = datetime.fromisoformat("2026-09-04T03:02:00+00:00").astimezone().strftime("%Y-%m-%d %H:%M")

@@ -5,25 +5,16 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from flexiv_steward.context import collect_context
+from flexiv_steward.models import Handoff, SessionSummary
 
 
 SOURCES = ("codex", "opencode", "cursor", "copilot")
 _SECRET = re.compile(r"(?i)\b(token|api[_-]?key|password|secret)\b\s*[:=]\s*\S+")
-
-
-@dataclass
-class SessionSummary:
-    source: str
-    updated_at: str
-    title: str
-    prompts: list[str]
-    commands: list[str]
 
 
 def _redact(text: str) -> str:
@@ -64,10 +55,13 @@ def _codex_sessions(project: Path, since: datetime, home: Path) -> list[SessionS
         if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) < since:
             continue
         events = list(_json_lines(path))
-        meta = next((event.get("payload", {}) for event in events if event.get("type") == "session_meta"), {})
+        meta: dict[str, Any] = next(
+            (event.get("payload", {}) for event in events if event.get("type") == "session_meta"),
+            {},
+        )
         if not _is_project_path(meta.get("cwd", ""), project):
             continue
-        prompts = []
+        prompts: list[str] = []
         commands = []
         for event in events:
             payload = event.get("payload", {})
@@ -78,7 +72,12 @@ def _codex_sessions(project: Path, since: datetime, home: Path) -> list[SessionS
                 if name:
                     commands.append(str(name))
         if prompts:
-            records.append(SessionSummary("codex", _timestamp(path.stat().st_mtime), prompts[0], prompts[-2:], commands[-3:]))
+            records.append(
+                SessionSummary(
+                    "codex", _timestamp(path.stat().st_mtime), prompts[0],
+                    tuple(prompts[-2:]), tuple(commands[-3:]),
+                )
+            )
     return records
 
 
@@ -115,7 +114,10 @@ def _opencode_sessions(project: Path, since: datetime, home: Path) -> list[Sessi
                     if command:
                         commands.append(_brief(str(command), 180))
             records.append(
-                SessionSummary("opencode", _timestamp(updated_ms / 1000), _brief(title), prompts[-2:], commands[-3:])
+                SessionSummary(
+                    "opencode", _timestamp(updated_ms / 1000), _brief(title),
+                    tuple(prompts[-2:]), tuple(commands[-3:]),
+                )
             )
         connection.close()
         return records
@@ -141,7 +143,7 @@ def _transcript_sessions(project: Path, since: datetime, home: Path, source: str
         contents = path.read_text(errors="replace")
         if project_text not in contents and project_slug not in str(path).replace("_", "-").lower():
             continue
-        prompts = []
+        prompts: list[str] = []
         for event in _json_lines(path):
             if source == "cursor" and event.get("role") == "user":
                 message = event.get("message", {})
@@ -154,7 +156,9 @@ def _transcript_sessions(project: Path, since: datetime, home: Path, source: str
                 prompts.append(str(event.get("data", {}).get("content", "")))
         prompts = [_brief(prompt) for prompt in prompts if prompt.strip()]
         if prompts:
-            records.append(SessionSummary(source, _timestamp(path.stat().st_mtime), prompts[0], prompts[-2:], []))
+            records.append(
+                SessionSummary(source, _timestamp(path.stat().st_mtime), prompts[0], tuple(prompts[-2:]), ())
+            )
     return records
 
 
@@ -180,30 +184,7 @@ def collect_sessions(
     return sorted(records, key=lambda record: record.updated_at, reverse=True)
 
 
-def handoff(project: Path, days: int, sources: Iterable[str], limit: int) -> dict[str, Any]:
+def handoff(project: Path, days: int, sources: Iterable[str], limit: int) -> Handoff:
     """Combine current workspace state with a bounded session-history summary."""
     records = collect_sessions(project, days, sources)[:limit]
-    return {
-        "context": collect_context(project),
-        "session_window_days": days,
-        "sessions": [asdict(record) for record in records],
-    }
-
-
-def format_handoff(data: dict[str, Any]) -> str:
-    """Render a short continuation brief rather than a raw transcript dump."""
-    context = data["context"]
-    lines = [
-        f"Project handoff: {context['project']}",
-        f"Branch: {context['status']['branch']} ({context['head']})",
-        f"Current changes: {len(context['status']['changes'])}",
-        f"Recent sessions ({data['session_window_days']} days): {len(data['sessions'])}",
-    ]
-    for session in data["sessions"]:
-        lines.append(f"\n- [{session['source']}] {session['updated_at']}: {session['title'][:180]}")
-        if session["commands"]:
-            lines.append("  Commands: " + "; ".join(session["commands"]))
-        for prompt in session["prompts"][-1:]:
-            if prompt != session["title"]:
-                lines.append("  Latest: " + prompt[:240])
-    return "\n".join(lines)
+    return Handoff(collect_context(project), days, tuple(records))

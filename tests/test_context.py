@@ -1,9 +1,12 @@
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
-from flexiv_steward.context import collect_context, discover_project, format_context
+from flexiv_steward.context import collect_context, discover_project
+from flexiv_steward.formatters import format_context
+from flexiv_steward.models import RepositoryStatus, SubmoduleContext
 
 
 class ContextTests(unittest.TestCase):
@@ -31,9 +34,9 @@ class ContextTests(unittest.TestCase):
             '{"configurePresets": [{"name": "ubuntu-debug"}, {"name": "base", "hidden": true}]}'
         )
         context = collect_context(self.project)
-        self.assertEqual(context["project"], str(self.project))
-        self.assertEqual(context["status"]["changes"], ["?? flexiv/"])
-        self.assertEqual(context["cmake"]["presets"], ["ubuntu-debug"])
+        self.assertEqual(context.project, self.project)
+        self.assertEqual(context.status.changes, ("?? flexiv/",))
+        self.assertEqual(context.cmake.presets, ("ubuntu-debug",))
 
     def test_context_reports_nested_and_submodule_commit_state(self) -> None:
         base = self.project / "flexiv" / "external" / "flexiv_sw_base"
@@ -46,21 +49,26 @@ class ContextTests(unittest.TestCase):
         subprocess.run(["git", "commit", "-m", "initial"], cwd=base, check=True, capture_output=True)
 
         context = collect_context(self.project)
-        nested = context["nested_repositories"][0]
-        self.assertEqual(nested["status"]["changes"], [])
-        self.assertEqual(nested["status"]["ahead"], 0)
-        self.assertEqual(nested["status"]["unpushed"], 0)
+        nested = context.nested_repositories[0]
+        self.assertEqual(nested.status.changes, ())
+        self.assertEqual(nested.status.ahead, 0)
+        self.assertEqual(nested.status.unpushed, 0)
 
         rendered = format_context(
-            {
-                **context,
-                "submodules": [
-                    {
-                        "path": "docker",
-                        "status": {"changes": [" M Dockerfile"], "ahead": 2, "unpushed": 2},
-                    }
-                ],
-            }
+            replace(
+                context,
+                submodules=(
+                    SubmoduleContext(
+                        "ok",
+                        "abc",
+                        "docker",
+                        "",
+                        RepositoryStatus(
+                            "main", None, 2, 0, None, 2, (" M Dockerfile",)
+                        ),
+                    ),
+                ),
+            )
         )
         self.assertIn("Working tree: 1 uncommitted entries: ?? flexiv/", rendered)
         self.assertIn("Unpushed commits: 0", rendered)
@@ -76,5 +84,5 @@ class ContextTests(unittest.TestCase):
 
         context = collect_context(self.project)
 
-        self.assertEqual(context["cmake"]["presets"], ["ubuntu-relwithdebinfo-g1"])
-        self.assertEqual(context["cmake"]["preset_file"], str(self.project / "CMakePresets.json"))
+        self.assertEqual(context.cmake.presets, ("ubuntu-relwithdebinfo-g1",))
+        self.assertEqual(context.cmake.preset_file, self.project / "CMakePresets.json")

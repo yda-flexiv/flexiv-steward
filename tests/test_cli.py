@@ -34,7 +34,7 @@ class CliTests(unittest.TestCase):
     def test_help_and_parser_errors_have_cli_exit_codes(self) -> None:
         code, stdout, stderr = self._invoke("--help")
         self.assertEqual(code, 0)
-        self.assertIn("{context,wt,builds,deps,build,setup,test,session,branchdiff}", stdout)
+        self.assertIn("{context,wt,builds,deps,build,setup,gc,test,session,branchdiff}", stdout)
         self.assertEqual(stderr, "")
 
         code, stdout, stderr = self._invoke("--not-an-option")
@@ -54,6 +54,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
         self.assertIn("Project:", stdout)
+
+    def test_gc_requires_dry_run_and_emits_machine_readable_sizes(self) -> None:
+        (self.project / ".gitignore").write_text("build/\n")
+        (self.project / "build").mkdir()
+        (self.project / "build" / "artifact.o").write_bytes(b"x" * 4096)
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "gc", "--dry-run", "--json"
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+        report = json.loads(stdout)
+        self.assertGreater(report["total_bytes"], 0)
+        self.assertEqual(report["candidates"][0]["path"], str(self.project / "build"))
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "gc")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("requires --dry-run", stderr)
 
     def test_build_dry_run_preserves_nested_routing_and_shell_quoting(self) -> None:
         (self.project / "flexiv").mkdir()

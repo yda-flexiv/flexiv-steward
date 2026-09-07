@@ -3,23 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
-from flexiv_steward.context import run_git
 from flexiv_steward.layout import source_root
-
-
-@dataclass(frozen=True)
-class DependencyStatus:
-    kind: str
-    name: str
-    path: str
-    expected: str | None
-    actual: str | None
-    state: str
-    dirty: bool = False
+from flexiv_steward.models import DependencyStatus
+from flexiv_steward.process import run_git
 
 
 _EXTERNAL = re.compile(r"FlexivAddExternal\(\s*(?P<name>[A-Za-z0-9_]+)(?P<body>.*?)\n\)", re.DOTALL)
@@ -84,46 +72,3 @@ def dependency_doctor(project: Path) -> list[DependencyStatus]:
 
 def has_dependency_errors(statuses: list[DependencyStatus]) -> bool:
     return any(status.state != "ok" for status in statuses)
-
-
-def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = False) -> str:
-    """Render version drift in a compact form suitable for build preflight output."""
-    if not statuses:
-        return "No declared external repositories or submodules found."
-    bootstrap = sum(status.state in {"missing", "uninitialized"} for status in statuses)
-    errors = sum(status.state not in {"ok", "missing", "uninitialized"} for status in statuses)
-    dirty = sum(status.dirty for status in statuses)
-    externals = sum(status.kind == "external" for status in statuses)
-    submodules = sum(status.kind == "submodule" for status in statuses)
-    lines = [
-        f"Dependency health: {'OK' if not errors and not dirty and not bootstrap else 'BOOTSTRAP REQUIRED' if bootstrap else 'ATTENTION'}",
-        f"Checked {len(statuses)} dependencies ({externals} externals, {submodules} submodules).",
-    ]
-    displayed = statuses if verbose else [status for status in statuses if status.state != "ok" or status.dirty]
-    if displayed:
-        lines.extend(["", "STATE        TYPE       DIRTY  DEPENDENCY                         EXPECTED    ACTUAL"])
-    for status in displayed:
-        expected = status.expected[:12] if status.expected else "-"
-        actual = status.actual[:12] if status.actual else "-"
-        lines.append(
-            f"{status.state:<12} {status.kind:<10} {'yes' if status.dirty else 'no':<6} "
-            f"{status.name:<34} {expected:<11} {actual}"
-        )
-    lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
-    if errors:
-        lines.append(
-            "Do not build until mismatches are corrected. Run `fs setup <profile>` "
-            "(for example, `fs setup rca`) to reconfigure and restore CMake-managed externals, "
-            "then re-run the build."
-        )
-    elif bootstrap:
-        lines.append("Run `fs setup <profile>` to initialize submodules and CMake-managed external repositories.")
-    elif dirty:
-        lines.append("Dirty dependencies are allowed, but reduce build reproducibility.")
-    elif not verbose:
-        lines.append("Use `fs deps doctor --verbose` to show every checked revision.")
-    return "\n".join(lines)
-
-
-def dependency_json(statuses: list[DependencyStatus]) -> list[dict[str, Any]]:
-    return [asdict(status) for status in statuses]

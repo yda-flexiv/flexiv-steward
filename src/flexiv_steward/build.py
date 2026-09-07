@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from flexiv_steward.context import ProjectError
+from flexiv_steward.errors import ProjectError
 from flexiv_steward.layout import source_relative_path, source_root
+from flexiv_steward.process import run_process
 
 
 @dataclass(frozen=True)
@@ -66,7 +66,7 @@ def profile_preset(project: Path, profile: BuildProfile) -> str:
         "yocto-all": "yocto-relwithdebinfo-g1",
     }
     fallback = direct_fallbacks.get(profile.name)
-    if source_root(project) == project and fallback in available:
+    if fallback is not None and source_root(project) == project and fallback in available:
         return fallback
     return profile.preset
 
@@ -125,4 +125,4 @@ def run_command(command: list[str], project: Path, dry_run: bool) -> int:
     print("$ " + shlex.join(command))
     if dry_run:
         return 0
-    return subprocess.run(command, cwd=project, check=False).returncode
+    return run_process(command, project, capture_output=False, timeout=None).returncode

@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from typing import cast
 from pathlib import Path
 from unittest.mock import patch
 
 from flexiv_steward.builds import cmake_gui_command, list_builds, open_cmake_gui, select_build
+from flexiv_steward.serialization import to_jsonable
 
 
 class BuildInventoryTests(unittest.TestCase):
@@ -31,8 +33,10 @@ class BuildInventoryTests(unittest.TestCase):
     def test_lists_build_with_matching_preset(self) -> None:
         builds = list_builds(self.project)
         self.assertEqual(builds[0].directory, "flexiv/build/Linux/Debug")
-        self.assertEqual(builds[0].presets, ["ubuntu-debug"])
-        self.assertEqual(builds[0].options, {})
+        self.assertEqual(builds[0].presets, ("ubuntu-debug",))
+        self.assertEqual(builds[0].options, ())
+        serialized = cast(list[object], to_jsonable(builds))
+        self.assertEqual(cast(dict[str, object], serialized[0])["options"], {})
 
     def test_selects_build_by_unique_basename(self) -> None:
         build = select_build(list_builds(self.project), "Debug")
@@ -48,7 +52,7 @@ class BuildInventoryTests(unittest.TestCase):
         )
         cache = self.project / "flexiv" / "build" / "Linux" / "Debug" / "CMakeCache.txt"
         cache.write_text("BuildTest_.All:BOOL=OFF\n")
-        self.assertEqual(list_builds(self.project)[0].presets, ["base"])
+        self.assertEqual(list_builds(self.project)[0].presets, ("base",))
 
     def test_creates_gui_command(self) -> None:
         build = list_builds(self.project)[0]
@@ -75,4 +79,4 @@ class BuildInventoryTests(unittest.TestCase):
             builds = list_builds(project)
 
             self.assertEqual(builds[0].directory, "build/Linux/Debug")
-            self.assertEqual(builds[0].presets, ["ubuntu-debug"])
+            self.assertEqual(builds[0].presets, ("ubuntu-debug",))

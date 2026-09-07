@@ -3,6 +3,12 @@ File: src/flexiv_steward/project_setup.py
 Description: This module provides functionality for setting up and managing project environments.
 """
 
+from pathlib import Path
+
+from flexiv_steward.errors import ProjectError
+from flexiv_steward.process import run_process
+
+
 def setup_project_for_emacs(project_path: str) -> None:
     """
     Set up the project environment for Emacs.
@@ -13,48 +19,39 @@ def setup_project_for_emacs(project_path: str) -> None:
     Raises:
         RuntimeError: If the setup process fails.
     """
-    import os
-    import subprocess
+    project = Path(project_path).expanduser().resolve()
     # Create a .projectile at project root
-    projectile_file_path = os.path.join(project_path, ".projectile")
+    projectile_file_path = project / ".projectile"
     try:
-        with open(projectile_file_path, "w") as f:
-            f.write(project_path)
+        projectile_file_path.write_text(str(project))
         print(f"Created .projectile file at {projectile_file_path}.")
-    except Exception as e:
-        raise RuntimeError(f"Failed to create .projectile file: {str(e)}") from e
+    except OSError as error:
+        raise ProjectError(f"Failed to create .projectile file: {error}") from error
     
     # if git submodules exist, run `git submodule update --init --recursive`
-    try:
-        subprocess.run(
-            ["git", "submodule", "update", "--init", "--recursive"],
-            cwd=project_path,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        print("Successfully updated git submodules.")
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to update git submodules: {e.stderr.decode().strip()}") from e
+    run_process(
+        ["git", "submodule", "update", "--init", "--recursive"],
+        project,
+        timeout=600,
+        check=True,
+    )
+    print("Successfully updated git submodules.")
     # configure project to generate compile_commands.json
-    try:
-        subprocess.run(
-            ["bash", "-c", "docker/shell-docker.sh cd flexiv && cmake --preset=ubuntu-relwithdebinfo-g1-All"],
-            cwd=project_path,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        print("Successfully configured project to generate compile_commands.json.")
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to configure project: {e.stderr.decode().strip()}") from e
+    run_process(
+        ["bash", "-c", "docker/shell-docker.sh cd flexiv && cmake --preset=ubuntu-relwithdebinfo-g1-All"],
+        project,
+        timeout=None,
+        capture_output=False,
+        check=True,
+    )
+    print("Successfully configured project to generate compile_commands.json.")
     # create soft link to compile_commands.json in project root
-    compile_commands_src = os.path.join(project_path, "flexiv", "build", "Linux", "RelWithDebInfo", "compile_commands.json")
-    compile_commands_dst = os.path.join(project_path, "compile_commands.json")
+    compile_commands_src = project / "flexiv" / "build" / "Linux" / "RelWithDebInfo" / "compile_commands.json"
+    compile_commands_dst = project / "compile_commands.json"
     try:
-        if os.path.exists(compile_commands_dst):
-            os.remove(compile_commands_dst)
-        os.symlink(compile_commands_src, compile_commands_dst)
+        if compile_commands_dst.exists() or compile_commands_dst.is_symlink():
+            compile_commands_dst.unlink()
+        compile_commands_dst.symlink_to(compile_commands_src)
         print(f"Created symlink for compile_commands.json at {compile_commands_dst}.")
-    except Exception as e:
-        raise RuntimeError(f"Failed to create symlink for compile_commands.json: {str(e)}") from e
+    except OSError as error:
+        raise ProjectError(f"Failed to create symlink for compile_commands.json: {error}") from error

@@ -8,20 +8,32 @@ import sys
 
 from flexiv_steward.branchdiff import _branchdiff_command
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
-from flexiv_steward.builds import build_json, cmake_gui_command, format_builds, list_builds, open_cmake_gui, select_build
-from flexiv_steward.context import ProjectError, collect_context, format_context
+from flexiv_steward.builds import list_builds, open_cmake_gui, select_build
+from flexiv_steward.context import collect_context
 from flexiv_steward.context import discover_project
-from flexiv_steward.deps import dependency_doctor, dependency_json, format_dependency_doctor, has_dependency_errors
-from flexiv_steward.sessions import SOURCES, format_handoff, handoff
+from flexiv_steward.deps import dependency_doctor, has_dependency_errors
+from flexiv_steward.errors import ProjectError
+from flexiv_steward.formatters import (
+    format_builds,
+    format_context,
+    format_dependency_doctor,
+    format_gc,
+    format_handoff,
+    format_sync,
+    format_worktree_doctor,
+)
+from flexiv_steward.gc import collect_gc_report
+from flexiv_steward.serialization import to_jsonable
+from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
-from flexiv_steward.sync import format_sync, sync_worktree
-from flexiv_steward.worktree import format_worktree_doctor, inspect_worktrees
+from flexiv_steward.sync import sync_worktree
+from flexiv_steward.worktree import inspect_worktrees
 
 
 def _context_command(args: argparse.Namespace) -> int:
     context = collect_context(args.project)
     if args.json:
-        print(json.dumps(context, indent=2, sort_keys=True))
+        print(json.dumps(to_jsonable(context), indent=2, sort_keys=True))
     else:
         print(format_context(context))
     return 0
@@ -30,7 +42,7 @@ def _context_command(args: argparse.Namespace) -> int:
 def _worktree_doctor_command(args: argparse.Namespace) -> int:
     worktrees = inspect_worktrees(discover_project(args.project))
     if args.json:
-        print(json.dumps(worktrees, indent=2, sort_keys=True))
+        print(json.dumps(to_jsonable(worktrees), indent=2, sort_keys=True))
     else:
         print(format_worktree_doctor(worktrees))
     return 0
@@ -60,7 +72,7 @@ def _session_handoff_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
     data = handoff(project, args.days, args.source or SOURCES, args.limit)
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=True))
+        print(json.dumps(to_jsonable(data), indent=2, sort_keys=True))
     else:
         print(format_handoff(data))
     return 0
@@ -75,7 +87,7 @@ def _worktree_sync_command(args: argparse.Namespace) -> int:
 def _build_list_command(args: argparse.Namespace) -> int:
     builds = list_builds(discover_project(args.project))
     if args.json:
-        print(json.dumps(build_json(builds), indent=2, sort_keys=True))
+        print(json.dumps(to_jsonable(builds), indent=2, sort_keys=True))
     else:
         print(format_builds(builds))
     return 0
@@ -90,7 +102,7 @@ def _build_gui_command(args: argparse.Namespace) -> int:
 def _dependency_doctor_command(args: argparse.Namespace) -> int:
     statuses = dependency_doctor(discover_project(args.project))
     if args.json:
-        print(json.dumps(dependency_json(statuses), indent=2, sort_keys=True))
+        print(json.dumps(to_jsonable(statuses), indent=2, sort_keys=True))
     else:
         print(format_dependency_doctor(statuses, args.verbose))
     return 1 if args.strict and has_dependency_errors(statuses) else 0
@@ -100,6 +112,19 @@ def _setup_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
     profile = resolve_profile(args.profile, args.preset)
     return setup_worktree(project, profile, args.dry_run)
+
+
+def _gc_command(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        raise ProjectError("garbage collection currently requires --dry-run; nothing was deleted")
+    if args.older_than_days < 0:
+        raise ProjectError("--older-than-days must not be negative")
+    report = collect_gc_report(discover_project(args.project), args.older_than_days)
+    if args.json:
+        print(json.dumps(to_jsonable(report), indent=2, sort_keys=True))
+    else:
+        print(format_gc(report))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--preset", help="use a CMake preset instead of a named profile")
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)
+    gc = subcommands.add_parser("gc", help="measure reclaimable worktree build directories")
+    gc.add_argument("--dry-run", action="store_true", help="report candidates without deleting anything")
+    gc.add_argument("--older-than-days", type=int, default=30, help="minimum inactive age (default: 30)")
+    gc.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    gc.set_defaults(handler=_gc_command)
     test = subcommands.add_parser("test", help="run project test workflows")
     test_commands = test.add_subparsers(dest="test_command", required=True)
     workflow = test_commands.add_parser("workflow", help="run the WorkflowTest integration runner")

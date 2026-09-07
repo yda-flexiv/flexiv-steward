@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
+from typing import TypedDict
+
+from flexiv_steward.process import run_process
 
 DIFF_RE = re.compile(r"^diff --git a/(.*) b/(.*)$")
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
@@ -20,13 +22,62 @@ DEL_FILE_RE = re.compile(r"^deleted file mode (\d+)$")
 BIN_RE = re.compile(r"^Binary files a/(.*) and b/(.*) differ$")
 
 
-def _git_diff(branch_a: str, branch_b: str) -> dict:
+class DiffLine(TypedDict):
+    type: str
+    text: str
+
+
+class DiffHunk(TypedDict):
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+    heading: str
+    lines: list[DiffLine]
+
+
+class ParsedFile(TypedDict, total=False):
+    old_path: str
+    new_path: str
+    old_mode: str
+    new_mode: str
+    chunks: list[DiffHunk]
+    binary: bool
+
+
+class Patch(TypedDict):
+    path: str
+    added: int
+    removed: int
+    status: str
+    old_path: str
+    new_path: str
+    old_mode: str
+    new_mode: str
+    chunks: list[DiffHunk]
+    binary: bool
+
+
+class DiffSummary(TypedDict):
+    files: int
+    added: int
+    removed: int
+
+
+class BranchDiff(TypedDict):
+    branch_a: str
+    branch_b: str
+    files: list[Patch]
+    summary: DiffSummary
+
+
+def _git_diff(branch_a: str, branch_b: str) -> BranchDiff:
     spec = f"{branch_a}..{branch_b}"
     name_status = _run(["git", "diff", "--name-status", spec])
     diff = _run(["git", "diff", spec])
     statuses = _parse_name_status(name_status)
     parsed = _parse_diff(diff)
-    patches: list[dict] = []
+    patches: list[Patch] = []
     seen: set[str] = set()
     for status_path, info in parsed.items():
         path = info.get("new_path") or info.get("old_path") or status_path
@@ -77,10 +128,7 @@ def _git_diff(branch_a: str, branch_b: str) -> dict:
 
 
 def _run(cmd: list[str]) -> str:
-    try:
-        return subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
-    except subprocess.CalledProcessError as e:
-        return e.output or ""
+    return run_process(cmd, Path.cwd()).output
 
 
 def _parse_name_status(output: str) -> dict[str, str]:
@@ -100,12 +148,12 @@ def _parse_name_status(output: str) -> dict[str, str]:
     return statuses
 
 
-def _parse_diff(output: str) -> dict[str, dict]:
-    files: dict[str, dict] = {}
+def _parse_diff(output: str) -> dict[str, ParsedFile]:
+    files: dict[str, ParsedFile] = {}
     current_file: str | None = None
-    current_chunks: list[dict] = []
-    current_hunk: dict | None = None
-    current_meta: dict = {}
+    current_chunks: list[DiffHunk] = []
+    current_hunk: DiffHunk | None = None
+    current_meta: ParsedFile = {}
 
     for line in output.split("\n"):
         m = DIFF_RE.match(line)
@@ -204,7 +252,7 @@ def _load_template() -> str:
     return tmpl.read_text()
 
 
-def _build_html(data: dict) -> str:
+def _build_html(data: BranchDiff) -> str:
     template = _load_template()
     return template.replace("__DATA_PLACEHOLDER__", json.dumps(data))
 

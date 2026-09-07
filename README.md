@@ -12,6 +12,7 @@ fs builds
 fs builds gui RelWithDebInfo
 fs deps doctor --strict
 fs setup rca --dry-run
+fs gc --dry-run
 fs build all --configure
 fs build rca --target RobotControlApp
 fs test workflow --dry-run
@@ -54,9 +55,26 @@ initializes recursive submodules, runs CMake configure so declared externals
 are checked out, and then verifies all dependency revisions.
 
 Submodule objects are cached below the superproject's common Git directory at
-`flexiv-steward/submodules`. The cache survives linked-worktree removal, so a
-later `fs setup` can use it with `git submodule update --reference` without
-depending on any long-lived checkout.
+`flexiv-steward/submodules-v2`. Caches are keyed by remote URL, contain only
+the exact commits pinned by the superproject, and are prefetched concurrently.
+They survive linked-worktree removal; warm setup therefore works entirely from
+the local cache without depending on a long-lived checkout.
+
+`fs gc --dry-run` measures the source `build` directory in every linked
+worktree, sorts candidates by size, and reports a conservative reclaimable
+total. It never deletes files. By default only clean worktrees inactive for at
+least 30 days are marked reclaimable; use `--older-than-days` to change that
+threshold and `--json` for automation.
+
+Development checks use strict mypy:
+
+```sh
+uv run mypy
+uv run python -m unittest discover -s tests -v
+```
+
+See [docs/performance.md](docs/performance.md) for the measured submodule and
+build-directory results.
 
 Both configure and build run through `docker/docker_dispatch.sh exec <platform>
 bash -c`, from the CMake source directory. Steward detects both the `flexiv_sw`

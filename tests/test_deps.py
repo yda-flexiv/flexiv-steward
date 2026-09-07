@@ -2,7 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from flexiv_steward.deps import DependencyStatus, declared_externals, format_dependency_doctor, has_dependency_errors
+from flexiv_steward.deps import declared_externals, has_dependency_errors
+from flexiv_steward.formatters import format_dependency_doctor
+from flexiv_steward.models import DependencyStatus
 
 
 class DependencyTests(unittest.TestCase):

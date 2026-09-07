@@ -2,149 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shlex
-import subprocess
 from pathlib import Path
 
 from flexiv_steward.build import BuildProfile, configure_command, profile_preset, run_command
-from flexiv_steward.context import ProjectError
-from flexiv_steward.deps import dependency_doctor, format_dependency_doctor, has_dependency_errors
+from flexiv_steward.deps import dependency_doctor, has_dependency_errors
+from flexiv_steward.errors import ProjectError
+from flexiv_steward.formatters import format_dependency_doctor
 from flexiv_steward.layout import source_root
-
-
-def submodule_command() -> list[str]:
-    return ["git", "submodule", "update", "--init", "--recursive"]
-
-
-def _git_output(project: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=project, check=False, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    if result.returncode:
-        return ""
-    return result.stdout
-
-
-def _submodule_cache_root(project: Path) -> Path | None:
-    """Return a cache that survives linked-worktree removal."""
-    output = _git_output(project, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
-    return Path(output) / "flexiv-steward" / "submodules" if output else None
-
-
-def _submodule_cache_path(cache_root: Path, relative_path: Path) -> Path:
-    digest = hashlib.sha256(relative_path.as_posix().encode()).hexdigest()[:16]
-    return cache_root / f"{digest}-{relative_path.name}.git"
-
-
-def _is_git_object_cache(path: Path) -> bool:
-    return (path / "HEAD").is_file() and (path / "objects").is_dir()
-
-
-def _submodule_paths(project: Path) -> list[Path]:
-    """Read submodule paths without requiring their checkouts to exist."""
-    output = _git_output(project, "config", "--file=.gitmodules", "--get-regexp", r"^submodule\..*\.path$")
-    paths: list[Path] = []
-    for line in output.splitlines():
-        _, path = line.split(None, 1)
-        paths.append(Path(path))
-    return paths
-
-
-def _submodule_update_commands(project: Path) -> list[tuple[Path, list[str]]]:
-    """Build cache-aware update commands for this worktree and existing children."""
-    commands: list[tuple[Path, list[str]]] = [(project, ["git", "submodule", "init"])]
-    cache_root = _submodule_cache_root(project)
-    pending = [(project, Path())]
-    while pending:
-        parent, relative_parent = pending.pop(0)
-        for path in _submodule_paths(parent):
-            checkout = parent / path
-            relative_path = relative_parent / path
-            reference = _submodule_cache_path(cache_root, relative_path) if cache_root else None
-            command = ["git", "submodule", "update", "--init"]
-            if reference is not None and _is_git_object_cache(reference):
-                command.extend(["--reference", str(reference)])
-            command.append(str(path))
-            commands.append((parent, command))
-            if checkout.is_dir():
-                commands.append((checkout, ["git", "submodule", "init"]))
-                pending.append((checkout, relative_path))
-    return commands
-
-
-def _update_submodule_cache(checkout: Path, cache: Path) -> int:
-    """Persist objects needed by *checkout* independently of any worktree."""
-    commit = _git_output(checkout, "rev-parse", "HEAD").strip()
-    if not commit:
-        return 0
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    reference = f"refs/flexiv-steward/{commit}"
-    if not _is_git_object_cache(cache):
-        result = subprocess.run(
-            ["git", "clone", "--mirror", "--no-hardlinks", str(checkout), str(cache)],
-            check=False,
-        )
-        if result.returncode:
-            return result.returncode
-        origin = _git_output(checkout, "remote", "get-url", "origin").strip()
-        if origin:
-            subprocess.run(["git", "remote", "set-url", "origin", origin], cwd=cache, check=False)
-        return subprocess.run(["git", "update-ref", reference, commit], cwd=cache, check=False).returncode
-    return subprocess.run(
-        ["git", "fetch", "--no-tags", str(checkout), f"+HEAD:{reference}"],
-        cwd=cache,
-        check=False,
-    ).returncode
+from flexiv_steward.process import merged_environment, run_process
+from flexiv_steward.submodules import initialize_submodules
 
 
 def _initialize_submodules(project: Path, dry_run: bool) -> int:
     """Initialize submodules using the superproject's persistent object cache."""
-    if not (project / ".gitmodules").is_file():
-        command = submodule_command()
-        if dry_run:
-            print("$ " + shlex.join(command))
-            return 0
-        return subprocess.run(command, cwd=project, check=False).returncode
-
-    if dry_run:
-        commands = _submodule_update_commands(project)
-        for cwd, command in commands:
-            prefix = "" if cwd == project else f"(cd {shlex.quote(str(cwd))} && "
-            suffix = "" if cwd == project else ")"
-            print(f"$ {prefix}{shlex.join(command)}{suffix}")
-        return 0
-    result = subprocess.run(["git", "submodule", "init"], cwd=project, check=False)
-    if result.returncode:
-        return result.returncode
-    cache_root = _submodule_cache_root(project)
-    pending = [(project, Path())]
-    while pending:
-        parent, relative_parent = pending.pop(0)
-        for path in _submodule_paths(parent):
-            checkout = parent / path
-            relative_path = relative_parent / path
-            reference = _submodule_cache_path(cache_root, relative_path) if cache_root else None
-            command = ["git", "submodule", "update", "--init"]
-            if reference is not None and _is_git_object_cache(reference):
-                command.extend(["--reference", str(reference)])
-            command.append(str(path))
-            result = subprocess.run(command, cwd=parent, check=False)
-            if result.returncode:
-                return result.returncode
-            if checkout.is_dir():
-                if reference is not None:
-                    result = _update_submodule_cache(checkout, reference)
-                    if result:
-                        return result
-                result = subprocess.run(["git", "submodule", "init"], cwd=checkout, check=False)
-                if result.returncode:
-                    return result.returncode
-                pending.append((checkout, relative_path))
-    return 0
+    return initialize_submodules(project, dry_run)
 
 
 def compile_commands_source(project: Path, preset_name: str) -> Path:
@@ -164,7 +37,7 @@ def compile_commands_source(project: Path, preset_name: str) -> Path:
         preset = by_name.get(name)
         if not preset:
             raise ProjectError(f"CMake configure preset '{name}' was not found in {preset_file}")
-        if value := preset.get("binaryDir"):
+        if isinstance(value := preset.get("binaryDir"), str):
             return value
         inherited = preset.get("inherits", [])
         if isinstance(inherited, str):
@@ -190,12 +63,11 @@ def configure_editor_files(project: Path, preset_name: str) -> None:
         raise ProjectError(f"clangd database rewriter is missing: {rewrite}")
     source_dir = source_root(project)
     host_database = source_dir / "compile_commands.json"
-    environment = dict(
-        os.environ,
+    environment = merged_environment(
         FLEXIV_CLANGD_DB_IN=str(source),
         FLEXIV_CLANGD_DB_OUT=str(host_database),
     )
-    result = subprocess.run(["bash", str(rewrite)], cwd=project, env=environment, check=False)
+    result = run_process(["bash", str(rewrite)], project, env=environment, capture_output=False)
     if result.returncode:
         raise ProjectError("failed to rewrite compile database for clangd")
     if not host_database.is_file():

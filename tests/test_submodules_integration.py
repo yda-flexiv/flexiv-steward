@@ -1,0 +1,87 @@
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from flexiv_steward.submodules import initialize_submodules
+
+
+class SubmoduleIntegrationTests(unittest.TestCase):
+    def test_exact_commit_cache_bootstraps_two_real_worktrees_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            module = root / "module-source"
+            remote = root / "module.git"
+            superproject = root / "super"
+            first_worktree = root / "feature-one"
+            second_worktree = root / "feature-two"
+
+            self._init(module)
+            (module / "payload.txt").write_text("required commit\n")
+            self._git(module, "add", "payload.txt")
+            self._git(module, "commit", "-m", "required")
+            required = self._output(module, "rev-parse", "HEAD")
+            (module / "payload.txt").write_text("newer tip\n")
+            self._git(module, "commit", "-am", "newer")
+            newer = self._output(module, "rev-parse", "HEAD")
+            self._git(root, "clone", "--bare", str(module), str(remote))
+
+            self._init(superproject)
+            self._git(
+                superproject,
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                str(remote),
+                "deps/module",
+            )
+            self._git(superproject / "deps" / "module", "checkout", "--detach", required)
+            self._git(
+                superproject,
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                str(remote),
+                "deps/module-two",
+            )
+            self._git(superproject, "add", ".gitmodules", "deps/module", "deps/module-two")
+            self._git(superproject, "commit", "-m", "pin submodule")
+            self._git(superproject, "worktree", "add", "-b", "feature-one", str(first_worktree))
+
+            self.assertEqual(initialize_submodules(first_worktree, dry_run=False), 0)
+            self.assertEqual(self._output(first_worktree / "deps" / "module", "rev-parse", "HEAD"), required)
+            self.assertEqual(
+                self._output(first_worktree / "deps" / "module-two", "rev-parse", "HEAD"),
+                newer,
+            )
+            cache_root = superproject / ".git" / "flexiv-steward" / "submodules-v2"
+            caches = tuple(cache_root.glob("*.git"))
+            self.assertEqual(len(caches), 1)
+            self.assertTrue((caches[0] / "shallow").is_file())
+
+            self._git(superproject, "worktree", "add", "-b", "feature-two", str(second_worktree))
+            remote.rename(root / "module-offline.git")
+            self.assertEqual(initialize_submodules(second_worktree, dry_run=False), 0)
+            self.assertEqual(self._output(second_worktree / "deps" / "module", "rev-parse", "HEAD"), required)
+            self.assertEqual(
+                self._output(second_worktree / "deps" / "module-two", "rev-parse", "HEAD"),
+                newer,
+            )
+
+    def _init(self, directory: Path) -> None:
+        directory.mkdir()
+        self._git(directory, "init")
+        self._git(directory, "config", "user.email", "test@example.com")
+        self._git(directory, "config", "user.name", "Test")
+
+    @staticmethod
+    def _git(directory: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=directory, check=True, capture_output=True)
+
+    @staticmethod
+    def _output(directory: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=directory, check=True, capture_output=True, text=True
+        ).stdout.strip()
