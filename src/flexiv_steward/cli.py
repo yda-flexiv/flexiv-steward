@@ -14,6 +14,7 @@ from flexiv_steward.context import discover_project
 from flexiv_steward.deps import dependency_doctor, has_dependency_errors
 from flexiv_steward.errors import ProjectError
 from flexiv_steward.formatters import (
+    _gib,
     format_builds,
     format_context,
     format_dependency_doctor,
@@ -22,7 +23,7 @@ from flexiv_steward.formatters import (
     format_sync,
     format_worktree_doctor,
 )
-from flexiv_steward.gc import collect_gc_report
+from flexiv_steward.gc import clean_builds, collect_gc_report
 from flexiv_steward.serialization import to_jsonable
 from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
@@ -127,6 +128,21 @@ def _gc_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gc_builds_command(args: argparse.Namespace) -> int:
+    result = clean_builds(discover_project(args.project), args.dry_run)
+    if args.json:
+        print(json.dumps(to_jsonable(result), indent=2, sort_keys=True))
+    else:
+        print(f"Keeping current worktree: {result.kept_worktree}")
+        action = "Would remove" if result.dry_run else "Removed"
+        for path in result.paths:
+            print(f"{action}: {path} ({_gib(result.size_bytes[path])})")
+        for path in result.skipped:
+            print(f"Skipped symlink: {path}")
+        print(f"{action} {len(result.paths)} build/install directories ({_gib(result.total_bytes)} total).")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -172,11 +188,24 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--preset", help="use a CMake preset instead of a named profile")
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)
-    gc = subcommands.add_parser("gc", help="measure reclaimable worktree build directories")
+    gc = subcommands.add_parser("gc", help="inspect or clean worktree build artifacts")
     gc.add_argument("--dry-run", action="store_true", help="report candidates without deleting anything")
     gc.add_argument("--older-than-days", type=int, default=30, help="minimum inactive age (default: 30)")
     gc.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     gc.set_defaults(handler=_gc_command)
+    gc_commands = gc.add_subparsers(dest="gc_command")
+    gc_builds = gc_commands.add_parser(
+        "builds", help="remove build/install artifacts from every other worktree"
+    )
+    gc_builds.add_argument(
+        "--dry-run", action="store_true", default=argparse.SUPPRESS,
+        help="preview directories without deleting anything",
+    )
+    gc_builds.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS,
+        help="emit JSON for tools and agents",
+    )
+    gc_builds.set_defaults(handler=_gc_builds_command)
     test = subcommands.add_parser("test", help="run project test workflows")
     test_commands = test.add_subparsers(dest="test_command", required=True)
     workflow = test_commands.add_parser("workflow", help="run the WorkflowTest integration runner")
