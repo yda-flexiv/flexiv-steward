@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import difflib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 from typing import TypedDict
 
 from flexiv_steward.errors import ProjectError
-from flexiv_steward.models import WorktreeInfo
+from flexiv_steward.models import WorktreeInfo, WorktreeSummary
 from flexiv_steward.process import run_git, run_process
 
 
@@ -146,42 +148,131 @@ def inspect_worktrees(project: str | Path) -> tuple[WorktreeInfo, ...]:
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         return tuple(executor.map(_inspect_worktree, worktrees))
 
-def create_worktree(worktree_path: str, branch_name: str) -> None:
-    """
-    Create a new git worktree at the specified path and checkout the given branch.
+def resolve_worktree(project: Path, identifier: str) -> Path:
+    """Resolve a worktree by absolute path, directory basename, or branch name."""
+    candidates = inspect_worktrees(project)
+    requested = Path(identifier).expanduser()
+    if requested.is_absolute():
+        resolved = requested.resolve()
+        matches = [entry for entry in candidates if entry.path.resolve() == resolved]
+    else:
+        matches = [
+            entry
+            for entry in candidates
+            if entry.path.name == identifier or entry.branch == identifier
+        ]
+    if not matches:
+        choices = sorted(
+            {entry.path.name for entry in candidates}
+            | {entry.branch for entry in candidates if entry.branch}
+        )
+        suggestion = difflib.get_close_matches(identifier, choices, n=1, cutoff=0.6)
+        hint = f"; did you mean '{suggestion[0]}'?" if suggestion else ""
+        raise ProjectError(f"no worktree named '{identifier}'{hint}")
+    if len(matches) > 1:
+        raise ProjectError(f"worktree name '{identifier}' is ambiguous; provide its absolute path")
+    return matches[0].path
 
-    Args:
-        worktree_path (str): The path where the new worktree will be created.
-        branch_name (str): The name of the branch to checkout in the new worktree.
 
-    Raises:
-        RuntimeError: If the git command fails.
-    """
-    run_process(["git", "worktree", "add", worktree_path, branch_name], Path.cwd(), check=True)
-    print(f"Successfully created worktree at {worktree_path} for branch {branch_name}.")
-    
-def remove_worktree(worktree_path: str) -> None:
-    """
-    Remove an existing git worktree at the specified path.
+def fetch_command(base: str) -> list[str]:
+    """Return the fetch arguments that refresh the remote side of *base*."""
+    remote, separator, branch = base.partition("/")
+    if separator:
+        return ["fetch", remote, branch]
+    return ["fetch", "origin", base]
 
-    Args:
-        worktree_path (str): The path of the worktree to be removed.
 
-    Raises:
-        RuntimeError: If the git command fails.
-    """
-    run_process(["git", "worktree", "remove", worktree_path], Path.cwd(), check=True)
-    print(f"Successfully removed worktree at {worktree_path}.")
-    
+def _branch_upstreams(project: Path) -> dict[str, str | None]:
+    output = run_git(project, "for-each-ref", "--format=%(refname:short)%09%(upstream:short)", "refs/heads")
+    upstreams: dict[str, str | None] = {}
+    for line in output.splitlines():
+        branch, _, upstream = line.partition("\t")
+        upstreams[branch] = upstream or None
+    return upstreams
 
-def list_worktrees() -> list[str]:
-    """
-    List all existing git worktrees.
 
-    Returns:
-        list: A list of paths to the existing worktrees.
+def _branch_creation_parent(project: Path, branch: str) -> str | None:
+    """Read the branch's original start point from its reflog, if it has one."""
+    try:
+        entries = run_git(project, "reflog", "show", "--format=%gs", branch).splitlines()
+    except ProjectError:
+        return None
+    prefix = "branch: Created from "
+    for entry in reversed(entries):
+        if entry.startswith(prefix):
+            parent = entry.removeprefix(prefix).strip()
+            return parent if parent and parent != "HEAD" else None
+    return None
 
-    Raises:
-        RuntimeError: If the git command fails.
-    """
-    return [line.split()[0] for line in run_git(Path.cwd(), "worktree", "list").splitlines()]
+
+def collect_worktree_summaries(project: Path) -> tuple[WorktreeSummary, ...]:
+    """List every worktree with its checked-out branch and parent branch."""
+    worktrees = parse_worktree_porcelain(run_git(project, "worktree", "list", "--porcelain"))
+    upstreams = _branch_upstreams(project)
+    current = project.resolve()
+    summaries: list[WorktreeSummary] = []
+    for worktree in worktrees:
+        parent = upstreams.get(worktree.branch) if worktree.branch else None
+        if not parent and worktree.branch:
+            parent = _branch_creation_parent(project, worktree.branch)
+        summaries.append(
+            WorktreeSummary(
+                path=worktree.path,
+                branch=worktree.branch,
+                parent=parent,
+                current=worktree.path.resolve() == current,
+                prunable=bool(worktree.prunable),
+            )
+        )
+    return tuple(summaries)
+
+
+def _workspace_root(project: Path) -> Path:
+    """Return the bare hub directory or primary worktree that owns *project*."""
+    common = Path(run_git(project, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = project / common
+    common = common.resolve()
+    if run_git(common, "rev-parse", "--is-bare-repository") == "true":
+        return common
+    worktrees = parse_worktree_porcelain(run_git(project, "worktree", "list", "--porcelain"))
+    return worktrees[0].path if worktrees else project
+
+
+def add_worktree(project: Path, branch: str, parent: str) -> Path:
+    """Fetch *parent*, then create a worktree under the workspace root for a new *branch*."""
+    destination = _workspace_root(project) / branch.replace("/", "-")
+    if destination.exists():
+        raise ProjectError(f"destination already exists: {destination}")
+    run_process(["git", *fetch_command(parent)], project, timeout=600, check=True)
+    run_process(
+        ["git", "worktree", "add", "-b", branch, str(destination), parent],
+        project,
+        timeout=300,
+        check=True,
+    )
+    return destination
+
+
+def plan_worktree_removal(project: Path, identifier: str) -> Path:
+    """Resolve a removable linked worktree, refusing the main or current one."""
+    target = resolve_worktree(project, identifier)
+    resolved = target.resolve()
+    if resolved == project.resolve():
+        raise ProjectError("refusing to remove the current worktree")
+    if resolved == _workspace_root(project).resolve():
+        raise ProjectError("refusing to remove the main worktree")
+    return target
+
+
+def remove_worktree(project: Path, target: Path) -> None:
+    """Delete a linked worktree directory, submodules included, then prune Git metadata."""
+    locked = any(
+        worktree.path.resolve() == target.resolve() and worktree.locked
+        for worktree in inspect_worktrees(project)
+    )
+    if locked:
+        run_process(["git", "worktree", "unlock", str(target)], project)
+    if target.exists():
+        shutil.rmtree(target)
+    run_git(project, "worktree", "prune")

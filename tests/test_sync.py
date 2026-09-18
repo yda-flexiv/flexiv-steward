@@ -5,12 +5,13 @@ from pathlib import Path
 
 from flexiv_steward.formatters import format_sync
 from flexiv_steward.models import SyncResult
-from flexiv_steward.sync import _fetch_command, sync_worktree
+from flexiv_steward.sync import sync_worktree
+from flexiv_steward.worktree import fetch_command
 
 
 class SyncTests(unittest.TestCase):
     def test_fetches_remote_tracking_branch(self) -> None:
-        self.assertEqual(_fetch_command("origin/v4.x_develop"), ["fetch", "origin", "v4.x_develop"])
+        self.assertEqual(fetch_command("origin/v4.x_develop"), ["fetch", "origin", "v4.x_develop"])
 
     def test_conflict_output_leaves_resolution_to_user(self) -> None:
         result = SyncResult(

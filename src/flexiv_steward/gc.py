@@ -37,9 +37,10 @@ def clean_builds(project: Path, dry_run: bool = False) -> BuildCleanup:
     Validate the entire plan before deleting any directory.
     """
     current = discover_project(project)
+    bare = run_git(current, "rev-parse", "--is-bare-repository") == "true"
     worktrees = parse_worktree_porcelain(run_git(current, "worktree", "list", "--porcelain"))
     roots = {worktree.path.resolve() for worktree in worktrees}
-    if current not in roots:
+    if not bare and current not in roots:
         raise ProjectError("current worktree is missing from Git's worktree list; nothing was deleted")
     paths: list[Path] = []
     skipped: list[Path] = []

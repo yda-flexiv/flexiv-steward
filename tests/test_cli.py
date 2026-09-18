@@ -1,5 +1,7 @@
+import argparse
 import io
 import json
+import os
 import shlex
 import subprocess
 import tempfile
@@ -8,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from flexiv_steward.cli import main
+from flexiv_steward.cli import _complete_branches, _complete_worktrees, main
 
 
 class CliTests(unittest.TestCase):
@@ -35,7 +37,7 @@ class CliTests(unittest.TestCase):
     def test_help_and_parser_errors_have_cli_exit_codes(self) -> None:
         code, stdout, stderr = self._invoke("--help")
         self.assertEqual(code, 0)
-        self.assertIn("{context,wt,builds,deps,build,setup,gc,test,session,branchdiff}", stdout)
+        self.assertIn("{context,wt,deps,build,setup,gc,test,session,branchdiff}", stdout)
         self.assertEqual(stderr, "")
 
         code, stdout, stderr = self._invoke("--not-an-option")
@@ -193,3 +195,109 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("refusing to remove tracked files", stderr)
         self.assertTrue((source / "build" / "source.txt").is_file())
+
+    def _add_remote(self, project: Path) -> Path:
+        remote = Path(self.tempdir.name) / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=project, check=True)
+        subprocess.run(
+            ["git", "push", "-q", "origin", "HEAD", "HEAD:release/v4.2"], cwd=project, check=True
+        )
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=project, check=True)
+        return remote
+
+    def _advance_remote_release(self, remote: Path) -> str:
+        pusher = Path(self.tempdir.name) / "pusher"
+        subprocess.run(["git", "clone", "-q", str(remote), str(pusher)], check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=pusher, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=pusher, check=True)
+        subprocess.run(["git", "checkout", "-q", "release/v4.2"], cwd=pusher, check=True)
+        (pusher / "second.txt").write_text("second")
+        subprocess.run(["git", "add", "second.txt"], cwd=pusher, check=True)
+        subprocess.run(["git", "commit", "-qm", "second"], cwd=pusher, check=True)
+        subprocess.run(["git", "push", "-q", "origin", "release/v4.2"], cwd=pusher, check=True)
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=pusher, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def test_wt_add_fetches_parent_and_normalizes_folder_name(self) -> None:
+        main = Path(self.tempdir.name) / "main"
+        main.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=main, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=main, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=main, check=True)
+        (main / "file.txt").write_text("x")
+        subprocess.run(["git", "add", "file.txt"], cwd=main, check=True)
+        subprocess.run(["git", "commit", "-qm", "initial"], cwd=main, check=True)
+        remote = self._add_remote(main)
+        expected_head = self._advance_remote_release(remote)
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(main),
+            "wt", "add", "task/SW-42-fix-thing", "from", "origin/release/v4.2",
+        )
+
+        self.assertEqual((code, stderr), (0, ""))
+        destination = main / "task-SW-42-fix-thing"
+        self.assertTrue(destination.is_dir())
+        self.assertIn(str(destination), stdout)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=destination, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        self.assertEqual(head, expected_head)
+
+        code, stdout, stderr = self._invoke("--project", str(main), "wt", "list", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        entry = next(item for item in json.loads(stdout) if item["branch"] == "task/SW-42-fix-thing")
+        self.assertEqual(entry["parent"], "origin/release/v4.2")
+
+    def test_wt_rm_requires_confirmation_then_removes_and_prunes(self) -> None:
+        other = self._add_worktree("task-SW-7")
+
+        with patch("builtins.input", return_value="n"):
+            code, stdout, stderr = self._invoke("--project", str(self.project), "wt", "rm", "task-SW-7")
+        self.assertEqual(code, 1)
+        self.assertIn("Aborted", stdout)
+        self.assertTrue(other.is_dir())
+
+        with patch("builtins.input", return_value="y"):
+            code, stdout, stderr = self._invoke("--project", str(self.project), "wt", "rm", "task-SW-7")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertFalse(other.exists())
+        listing = subprocess.run(
+            ["git", "worktree", "list"], cwd=self.project, capture_output=True, text=True, check=True
+        ).stdout
+        self.assertNotIn("task-SW-7", listing)
+
+    def test_wt_rm_refuses_current_worktree(self) -> None:
+        code, stdout, stderr = self._invoke("--project", str(self.project), "wt", "rm", self.project.name)
+        self.assertEqual(code, 2)
+        self.assertIn("refusing to remove the current worktree", stderr)
+
+    def test_completers_suggest_worktrees_and_branches(self) -> None:
+        self._add_worktree("task-SW-7")
+        parsed = argparse.Namespace(project=str(self.project))
+
+        self.assertIn("task-SW-7", _complete_worktrees(prefix="task", parsed_args=parsed))
+        self.assertNotIn("task-SW-7", _complete_worktrees(prefix="nothing", parsed_args=parsed))
+        self.assertIn("task-SW-7", _complete_branches(prefix="task", parsed_args=parsed))
+
+        missing = argparse.Namespace(project=str(Path(self.tempdir.name) / "not-a-repo"))
+        self.assertEqual(_complete_worktrees(parsed_args=missing), [])
+        self.assertEqual(_complete_branches(parsed_args=missing), [])
+
+    def test_wt_switch_opens_a_shell_in_the_target_worktree(self) -> None:
+        other = self._add_worktree("shell-target")
+        script = Path(self.tempdir.name) / "shell.sh"
+        output = Path(self.tempdir.name) / "shell-cwd.txt"
+        script.write_text(f'#!/bin/sh\npwd > "{output}"\n')
+        script.chmod(0o755)
+
+        with patch.dict(os.environ, {"SHELL": str(script)}):
+            code, stdout, stderr = self._invoke(
+                "--project", str(self.project), "wt", "switch", "shell-target"
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(output.read_text().strip(), str(other))
+        self.assertIn(str(other), stdout)

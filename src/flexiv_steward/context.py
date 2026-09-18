@@ -31,9 +31,16 @@ class _PresetFile(TypedDict, total=False):
 
 
 def discover_project(path: str | Path | None = None) -> Path:
-    """Return the top-level Git worktree containing *path*."""
+    """Return the Git repository root containing *path*, including a bare hub."""
     candidate = Path(path or Path.cwd()).expanduser().resolve()
-    return Path(run_git(candidate, "rev-parse", "--show-toplevel")).resolve()
+    try:
+        return Path(run_git(candidate, "rev-parse", "--show-toplevel")).resolve()
+    except ProjectError:
+        pass
+    git_dir = Path(run_git(candidate, "rev-parse", "--absolute-git-dir")).resolve()
+    if run_git(candidate, "rev-parse", "--is-bare-repository") == "true":
+        return git_dir
+    raise ProjectError(f"{candidate} is not inside a Git worktree")
 
 
 def _status(project: Path) -> RepositoryStatus:

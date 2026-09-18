@@ -2,12 +2,14 @@
 name = "flexiv-steward"
 version = "0.2.0"
 description = "Add your description here"
-readme = "README.md"
+readme = { file = "README.org", content-type = "text/plain" }
 authors = [
     { name = "da.yang", email = "da.yang@flexiv.com" }
 ]
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "argcomplete>=3.7.2",
+]
 
 [dependency-groups]
 dev = [

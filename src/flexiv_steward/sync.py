@@ -5,33 +5,9 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from flexiv_steward.errors import ProjectError
 from flexiv_steward.models import SyncResult
 from flexiv_steward.process import run_git, run_process
-from flexiv_steward.worktree import inspect_worktrees
-
-
-def resolve_worktree(project: Path, identifier: str) -> Path:
-    """Resolve a worktree absolute path or its unique directory basename."""
-    candidates = inspect_worktrees(project)
-    requested = Path(identifier).expanduser()
-    if requested.is_absolute():
-        resolved = requested.resolve()
-        matches = [entry for entry in candidates if entry.path.resolve() == resolved]
-    else:
-        matches = [entry for entry in candidates if entry.path.name == identifier]
-    if not matches:
-        raise ProjectError(f"no worktree named '{identifier}'")
-    if len(matches) > 1:
-        raise ProjectError(f"worktree name '{identifier}' is ambiguous; provide its absolute path")
-    return matches[0].path
-
-
-def _fetch_command(base: str) -> list[str]:
-    remote, separator, branch = base.partition("/")
-    if separator:
-        return ["fetch", remote, branch]
-    return ["fetch", "origin", base]
+from flexiv_steward.worktree import fetch_command, resolve_worktree
 
 
 def sync_worktree(project: Path, identifier: str, base: str, dry_run: bool) -> SyncResult:
@@ -42,7 +18,7 @@ def sync_worktree(project: Path, identifier: str, base: str, dry_run: bool) -> S
     changes = run_git(worktree, "status", "--porcelain")
     if changes:
         return SyncResult("dirty", worktree, base, (), "Refusing to merge into a worktree with local changes.")
-    fetch = _fetch_command(base)
+    fetch = fetch_command(base)
     commands = [shlex.join(["git", *fetch]), shlex.join(["git", "merge", "--no-edit", base])]
     if dry_run:
         return SyncResult("dry-run", worktree, base, (), "\n".join(commands))

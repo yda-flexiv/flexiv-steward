@@ -4,30 +4,41 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+
+import argcomplete
 
 from flexiv_steward.branchdiff import _branchdiff_command
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
-from flexiv_steward.builds import list_builds, open_cmake_gui, select_build
 from flexiv_steward.context import collect_context
 from flexiv_steward.context import discover_project
 from flexiv_steward.deps import dependency_doctor, has_dependency_errors
 from flexiv_steward.errors import ProjectError
 from flexiv_steward.formatters import (
     _gib,
-    format_builds,
     format_context,
     format_dependency_doctor,
     format_handoff,
     format_sync,
     format_worktree_doctor,
+    format_worktree_list,
 )
 from flexiv_steward.gc import clean_builds
+from flexiv_steward.process import run_git
 from flexiv_steward.serialization import to_jsonable
 from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
 from flexiv_steward.sync import sync_worktree
-from flexiv_steward.worktree import inspect_worktrees
+from flexiv_steward.worktree import (
+    add_worktree,
+    collect_worktree_summaries,
+    inspect_worktrees,
+    plan_worktree_removal,
+    remove_worktree,
+    resolve_worktree,
+)
 
 
 def _context_command(args: argparse.Namespace) -> int:
@@ -46,6 +57,44 @@ def _worktree_doctor_command(args: argparse.Namespace) -> int:
     else:
         print(format_worktree_doctor(worktrees))
     return 0
+
+
+def _worktree_list_command(args: argparse.Namespace) -> int:
+    summaries = collect_worktree_summaries(discover_project(args.project))
+    if args.json:
+        print(json.dumps(to_jsonable(summaries), indent=2, sort_keys=True))
+    else:
+        print(format_worktree_list(summaries))
+    return 0
+
+
+def _worktree_add_command(args: argparse.Namespace) -> int:
+    destination = add_worktree(discover_project(args.project), args.branch, args.parent)
+    print(f"Created worktree {destination} on branch {args.branch} from {args.parent}.")
+    print(f"Run `fs --project {destination} setup` to initialize submodules and configure.")
+    return 0
+
+
+def _worktree_remove_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    target = plan_worktree_removal(project, args.worktree)
+    try:
+        answer = input(f"Remove worktree {target} and all of its files? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        print("Aborted; nothing was removed.")
+        return 1
+    remove_worktree(project, target)
+    print(f"Removed worktree {target}.")
+    return 0
+
+
+def _worktree_switch_command(args: argparse.Namespace) -> int:
+    target = resolve_worktree(discover_project(args.project), args.worktree)
+    shell = os.environ.get("SHELL") or "bash"
+    print(f"Entering {target}; exit the shell to return.")
+    return subprocess.run([shell], cwd=target).returncode
 
 
 def _build_command(args: argparse.Namespace) -> int:
@@ -84,21 +133,6 @@ def _worktree_sync_command(args: argparse.Namespace) -> int:
     return 0 if result.state in {"synced", "dry-run"} else 1
 
 
-def _build_list_command(args: argparse.Namespace) -> int:
-    builds = list_builds(discover_project(args.project))
-    if args.json:
-        print(json.dumps(to_jsonable(builds), indent=2, sort_keys=True))
-    else:
-        print(format_builds(builds))
-    return 0
-
-
-def _build_gui_command(args: argparse.Namespace) -> int:
-    project = discover_project(args.project)
-    build = select_build(list_builds(project), args.directory)
-    return open_cmake_gui(project, build, args.dry_run)
-
-
 def _dependency_doctor_command(args: argparse.Namespace) -> int:
     statuses = dependency_doctor(discover_project(args.project))
     if args.json:
@@ -129,6 +163,32 @@ def _gc_builds_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _complete_worktrees(
+    prefix: str = "", parsed_args: argparse.Namespace | None = None, **_: object
+) -> list[str]:
+    try:
+        summaries = collect_worktree_summaries(discover_project(getattr(parsed_args, "project", None)))
+    except (ProjectError, OSError):
+        return []
+    choices = {summary.path.name for summary in summaries}
+    choices.update(summary.branch for summary in summaries if summary.branch)
+    return sorted(choice for choice in choices if choice.startswith(prefix))
+
+
+def _complete_branches(
+    prefix: str = "", parsed_args: argparse.Namespace | None = None, **_: object
+) -> list[str]:
+    try:
+        project = discover_project(getattr(parsed_args, "project", None))
+        output = run_git(project, "for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes")
+    except (ProjectError, OSError):
+        return []
+    choices = {
+        branch for branch in output.splitlines() if branch and not branch.endswith("/HEAD")
+    }
+    return sorted(choice for choice in choices if choice.startswith(prefix))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fs", description="Flexiv development-workspace helper")
     parser.add_argument("--project", help="Git worktree to operate on (default: discover from cwd)")
@@ -142,18 +202,29 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     doctor.set_defaults(handler=_worktree_doctor_command)
     sync = worktree_commands.add_parser("sync", help="fetch and merge a base branch into one clean worktree")
-    sync.add_argument("worktree", help="worktree directory name or absolute path")
-    sync.add_argument("--base", default="origin/v4.x_develop", help="base ref to fetch and merge")
+    sync_worktree = sync.add_argument("worktree", help="worktree directory basename, branch name, or absolute path")
+    setattr(sync_worktree, "completer", _complete_worktrees)
+    sync_base = sync.add_argument("--base", default="origin/v4.x_develop", help="base ref to fetch and merge")
+    setattr(sync_base, "completer", _complete_branches)
     sync.add_argument("--dry-run", action="store_true", help="print commands without fetching or merging")
     sync.set_defaults(handler=_worktree_sync_command)
-    builds = subcommands.add_parser("builds", help="list configured CMake build directories")
-    builds.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
-    builds.set_defaults(handler=_build_list_command)
-    build_commands = builds.add_subparsers(dest="builds_command")
-    gui = build_commands.add_parser("gui", help="select a build directory and open it in cmake-gui")
-    gui.add_argument("directory", nargs="?", help="relative build directory or unique basename")
-    gui.add_argument("--dry-run", action="store_true", help="print the cmake-gui command without opening it")
-    gui.set_defaults(handler=_build_gui_command)
+    wt_list = worktree_commands.add_parser("list", help="list worktrees with their branch and parent branch")
+    wt_list.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    wt_list.set_defaults(handler=_worktree_list_command)
+    wt_add = worktree_commands.add_parser("add", help="fetch a parent branch and create a worktree for a new branch")
+    wt_add.add_argument("branch", help="new branch name, for example task/SW-123-fix-thing")
+    wt_add.add_argument("separator", choices=("from",), metavar="from", help=argparse.SUPPRESS)
+    wt_parent = wt_add.add_argument("parent", help="base branch, for example origin/release/v4.2")
+    setattr(wt_parent, "completer", _complete_branches)
+    wt_add.set_defaults(handler=_worktree_add_command)
+    wt_remove = worktree_commands.add_parser("rm", help="delete a worktree after confirmation")
+    wt_remove_worktree = wt_remove.add_argument("worktree", help="worktree directory basename, branch name, or absolute path")
+    setattr(wt_remove_worktree, "completer", _complete_worktrees)
+    wt_remove.set_defaults(handler=_worktree_remove_command)
+    wt_switch = worktree_commands.add_parser("switch", help="open a shell inside another worktree")
+    wt_switch_worktree = wt_switch.add_argument("worktree", help="worktree directory basename, branch name, or absolute path")
+    setattr(wt_switch_worktree, "completer", _complete_worktrees)
+    wt_switch.set_defaults(handler=_worktree_switch_command)
     dependencies = subcommands.add_parser("deps", help="inspect external-repository and submodule revisions")
     dependency_commands = dependencies.add_subparsers(dest="dependency_command", required=True)
     dependency_doctor_parser = dependency_commands.add_parser("doctor", help="compare checked-out dependencies with declared revisions")
@@ -212,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
     try:
         exit_code = args.handler(args)

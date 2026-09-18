@@ -6,8 +6,6 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import TypeAlias
 
-from flexiv_steward.models import BuildDirectory
-
 
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -17,15 +15,6 @@ def to_jsonable(value: object) -> JsonValue:
         return value
     if isinstance(value, Path):
         return str(value)
-    if isinstance(value, BuildDirectory):
-        return {
-            "directory": value.directory,
-            "source_directory": value.source_directory,
-            "build_type": value.build_type,
-            "generator": value.generator,
-            "presets": list(value.presets),
-            "options": dict(value.options),
-        }
     if is_dataclass(value) and not isinstance(value, type):
         return {
             field.name: to_jsonable(getattr(value, field.name))

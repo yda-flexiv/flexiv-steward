@@ -82,13 +82,12 @@ class WorktreeInfo:
 
 
 @dataclass(frozen=True)
-class BuildDirectory:
-    directory: str
-    source_directory: str
-    build_type: str | None
-    generator: str | None
-    presets: tuple[str, ...]
-    options: tuple[tuple[str, str], ...]
+class WorktreeSummary:
+    path: Path
+    branch: str | None
+    parent: str | None
+    current: bool
+    prunable: bool = False
 
 
 @dataclass(frozen=True)

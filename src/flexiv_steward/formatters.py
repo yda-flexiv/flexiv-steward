@@ -6,13 +6,13 @@ import shlex
 from datetime import datetime
 
 from flexiv_steward.models import (
-    BuildDirectory,
     DependencyStatus,
     Handoff,
     ProjectContext,
     RepositoryStatus,
     SyncResult,
     WorktreeInfo,
+    WorktreeSummary,
 )
 
 
@@ -70,15 +70,26 @@ def format_worktree_doctor(worktrees: tuple[WorktreeInfo, ...]) -> str:
     return "\n".join(lines)
 
 
-def format_builds(builds: list[BuildDirectory]) -> str:
-    if not builds:
-        return "No configured CMake builds found under the source build directory."
-    lines = ["BUILD DIRECTORY                              TYPE             PRESET / CACHE CONFIGURATION"]
-    for build in builds:
-        preset = ", ".join(build.presets) or "custom or modified"
-        options = ", ".join(f"{key}={value}" for key, value in build.options)
-        detail = preset if not options else f"{preset}; {options}"
-        lines.append(f"{build.directory:<44} {(build.build_type or '-'): <16} {detail}")
+def format_worktree_list(summaries: tuple[WorktreeSummary, ...]) -> str:
+    header = ("CUR", "BRANCH", "PARENT", "PATH")
+    rows = [
+        (
+            "*" if summary.current else "",
+            summary.branch or "detached",
+            summary.parent or "-",
+            str(summary.path) + (" (prunable)" if summary.prunable else ""),
+        )
+        for summary in summaries
+    ]
+    widths = [max((len(row[index]) for row in rows), default=0) for index in range(3)]
+    widths = [max(width, len(header[index])) for index, width in enumerate(widths)]
+    lines = [
+        f"{header[0]:<{widths[0]}}  {header[1]:<{widths[1]}}  {header[2]:<{widths[2]}}  {header[3]}"
+    ]
+    for row in rows:
+        lines.append(
+            f"{row[0]:<{widths[0]}}  {row[1]:<{widths[1]}}  {row[2]:<{widths[2]}}  {row[3]}"
+        )
     return "\n".join(lines)
 
 
