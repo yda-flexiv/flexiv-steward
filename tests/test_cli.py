@@ -56,26 +56,6 @@ class CliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertIn("Project:", stdout)
 
-    def test_gc_requires_dry_run_and_emits_machine_readable_sizes(self) -> None:
-        (self.project / ".gitignore").write_text("build/\n")
-        (self.project / "build").mkdir()
-        (self.project / "build" / "artifact.o").write_bytes(b"x" * 4096)
-
-        code, stdout, stderr = self._invoke(
-            "--project", str(self.project), "gc", "--dry-run", "--json"
-        )
-
-        self.assertEqual(code, 0)
-        self.assertEqual(stderr, "")
-        report = json.loads(stdout)
-        self.assertGreater(report["total_bytes"], 0)
-        self.assertEqual(report["candidates"][0]["path"], str(self.project / "build"))
-
-        code, stdout, stderr = self._invoke("--project", str(self.project), "gc")
-        self.assertEqual(code, 2)
-        self.assertEqual(stdout, "")
-        self.assertIn("requires --dry-run", stderr)
-
     def test_build_dry_run_preserves_nested_routing_and_shell_quoting(self) -> None:
         (self.project / "flexiv").mkdir()
         (self.project / "docker").mkdir()
@@ -111,17 +91,16 @@ class CliTests(unittest.TestCase):
         nested.mkdir()
         # The selected worktree is nested inside the main checkout. Keep it even
         # when invoked from a subdirectory, and remove the main checkout's builds.
-        for arguments in (("builds", "--dry-run", "--json"), ("--dry-run", "--json", "builds")):
-            code, stdout, stderr = self._invoke("--project", str(nested), "gc", *arguments)
-            self.assertEqual((code, stderr), (0, ""))
-            result = json.loads(stdout)
-            self.assertTrue(result["dry_run"])
-            self.assertEqual(result["kept_worktree"], str(other))
-            self.assertEqual(set(result["paths"]), {str(self.project / name) for name in artifact_roots})
-            self.assertEqual(set(result["size_bytes"]), set(result["paths"]))
-            self.assertTrue(all(size > 0 for size in result["size_bytes"].values()))
-            self.assertEqual(result["total_bytes"], sum(result["size_bytes"].values()))
-            self.assertTrue(all((self.project / name).is_dir() for name in artifact_roots))
+        code, stdout, stderr = self._invoke("--project", str(nested), "gc", "builds", "--dry-run", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        result = json.loads(stdout)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["kept_worktree"], str(other))
+        self.assertEqual(set(result["paths"]), {str(self.project / name) for name in artifact_roots})
+        self.assertEqual(set(result["size_bytes"]), set(result["paths"]))
+        self.assertTrue(all(size > 0 for size in result["size_bytes"].values()))
+        self.assertEqual(result["total_bytes"], sum(result["size_bytes"].values()))
+        self.assertTrue(all((self.project / name).is_dir() for name in artifact_roots))
         code, stdout, stderr = self._invoke("--project", str(nested), "gc", "builds", "--json")
         self.assertEqual((code, stderr), (0, ""))
         self.assertFalse(json.loads(stdout)["dry_run"])

@@ -133,22 +133,3 @@ class SubmoduleSpec:
     path: Path
     url: str
     commit: str
-
-
-@dataclass(frozen=True)
-class GcCandidate:
-    path: Path
-    worktree: Path
-    size_bytes: int
-    last_activity: str | None
-    age_days: int | None
-    reclaimable: bool
-    reason: str
-
-
-@dataclass(frozen=True)
-class GcReport:
-    candidates: tuple[GcCandidate, ...]
-    total_bytes: int
-    reclaimable_bytes: int
-    older_than_days: int

@@ -24,6 +24,7 @@ The optimized implementation:
 - clones warm worktrees from the local cache without fetching;
 - keeps the real remote URL in each resulting submodule checkout.
 
-On 2026-09-07, fs gc --dry-run scanned nine Flexiv build roots in 9.6 seconds
-and measured 104.00 GiB. With the default 30-day inactivity threshold it
-identified 16.71 GiB in two stale build roots. No files were deleted.
+On 2026-09-07, a one-off inventory scan of nine Flexiv build roots (the retired
+`fs gc --dry-run` command) took 9.6 seconds and measured 104.00 GiB. Under the
+former 30-day inactivity rule it identified 16.71 GiB in two stale build roots.
+No files were deleted.

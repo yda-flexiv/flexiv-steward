@@ -8,7 +8,6 @@ from datetime import datetime
 from flexiv_steward.models import (
     BuildDirectory,
     DependencyStatus,
-    GcReport,
     Handoff,
     ProjectContext,
     RepositoryStatus,
@@ -168,25 +167,3 @@ def format_handoff(data: Handoff) -> str:
 
 def _gib(size: int) -> str:
     return f"{size / (1024 ** 3):.2f} GiB"
-
-
-def format_gc(report: GcReport) -> str:
-    lines = [
-        "DRY RUN: no files will be deleted.",
-        "RECLAIM  SIZE        AGE     REASON                              BUILD DIRECTORY",
-    ]
-    for candidate in report.candidates:
-        age = f"{candidate.age_days}d" if candidate.age_days is not None else "-"
-        lines.append(
-            f"{'yes' if candidate.reclaimable else 'no':<8} {_gib(candidate.size_bytes):<11} "
-            f"{age:<7} {candidate.reason:<35} {candidate.path}"
-        )
-    lines.extend(
-        [
-            "",
-            f"Found {_gib(report.total_bytes)} across {len(report.candidates)} build directories.",
-            f"Conservative reclaimable estimate: {_gib(report.reclaimable_bytes)} "
-            f"(unlocked and inactive for at least {report.older_than_days} days, or prunable).",
-        ]
-    )
-    return "\n".join(lines)

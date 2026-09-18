@@ -12,7 +12,6 @@ fs builds
 fs builds gui RelWithDebInfo
 fs deps doctor --strict
 fs setup rca --dry-run
-fs gc --dry-run
 fs gc builds --dry-run
 fs gc builds
 fs build all --configure
@@ -62,12 +61,6 @@ the exact commits pinned by the superproject, and are prefetched concurrently.
 They survive linked-worktree removal; warm setup therefore works entirely from
 the local cache without depending on a long-lived checkout.
 
-`fs gc --dry-run` measures the source `build` directory in every linked
-worktree, sorts candidates by size, and reports a conservative reclaimable
-total. It never deletes files. By default only clean worktrees inactive for at
-least 30 days are marked reclaimable; use `--older-than-days` to change that
-threshold and `--json` for automation.
-
 `fs gc builds` deletes build and install artifacts from every other worktree
 in the same Git repository, regardless of age, dirty state, or worktree lock.
 It preserves the enclosing worktree (or the one selected with `--project`).
@@ -78,8 +71,7 @@ worktree are refused. Source files and external install locations are preserved.
 Use `fs gc builds --dry-run` to preview the paths and `--json` for machine-readable
 results. Both preview and cleanup display each directory's disk usage and the
 total, measured before deletion. JSON includes `size_bytes` keyed by directory
-path and `total_bytes`. The legacy `fs gc --dry-run` inventory remains available
-separately.
+path and `total_bytes`.
 
 Development checks use strict mypy:
 

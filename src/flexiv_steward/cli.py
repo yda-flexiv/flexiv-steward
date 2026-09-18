@@ -18,12 +18,11 @@ from flexiv_steward.formatters import (
     format_builds,
     format_context,
     format_dependency_doctor,
-    format_gc,
     format_handoff,
     format_sync,
     format_worktree_doctor,
 )
-from flexiv_steward.gc import clean_builds, collect_gc_report
+from flexiv_steward.gc import clean_builds
 from flexiv_steward.serialization import to_jsonable
 from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
@@ -115,19 +114,6 @@ def _setup_command(args: argparse.Namespace) -> int:
     return setup_worktree(project, profile, args.dry_run)
 
 
-def _gc_command(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        raise ProjectError("garbage collection currently requires --dry-run; nothing was deleted")
-    if args.older_than_days < 0:
-        raise ProjectError("--older-than-days must not be negative")
-    report = collect_gc_report(discover_project(args.project), args.older_than_days)
-    if args.json:
-        print(json.dumps(to_jsonable(report), indent=2, sort_keys=True))
-    else:
-        print(format_gc(report))
-    return 0
-
-
 def _gc_builds_command(args: argparse.Namespace) -> int:
     result = clean_builds(discover_project(args.project), args.dry_run)
     if args.json:
@@ -188,21 +174,17 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--preset", help="use a CMake preset instead of a named profile")
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)
-    gc = subcommands.add_parser("gc", help="inspect or clean worktree build artifacts")
-    gc.add_argument("--dry-run", action="store_true", help="report candidates without deleting anything")
-    gc.add_argument("--older-than-days", type=int, default=30, help="minimum inactive age (default: 30)")
-    gc.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
-    gc.set_defaults(handler=_gc_command)
-    gc_commands = gc.add_subparsers(dest="gc_command")
+    gc = subcommands.add_parser("gc", help="clean worktree build artifacts")
+    gc_commands = gc.add_subparsers(dest="gc_command", required=True)
     gc_builds = gc_commands.add_parser(
         "builds", help="remove build/install artifacts from every other worktree"
     )
     gc_builds.add_argument(
-        "--dry-run", action="store_true", default=argparse.SUPPRESS,
+        "--dry-run", action="store_true",
         help="preview directories without deleting anything",
     )
     gc_builds.add_argument(
-        "--json", action="store_true", default=argparse.SUPPRESS,
+        "--json", action="store_true",
         help="emit JSON for tools and agents",
     )
     gc_builds.set_defaults(handler=_gc_builds_command)
