@@ -107,15 +107,23 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
         f"Checked {len(statuses)} dependencies ({externals} externals, {submodules} submodules).",
     ]
     displayed = statuses if verbose else [status for status in statuses if status.state != "ok" or status.dirty]
-    if displayed:
-        lines.extend(["", "STATE        TYPE       DIRTY  DEPENDENCY                         EXPECTED    ACTUAL"])
-    for status in displayed:
-        expected = status.expected[:12] if status.expected else "-"
-        actual = status.actual[:12] if status.actual else "-"
-        lines.append(
-            f"{status.state:<12} {status.kind:<10} {'yes' if status.dirty else 'no':<6} "
-            f"{status.name:<34} {expected:<11} {actual}"
+    rows = [
+        (
+            status.state,
+            status.kind,
+            "yes" if status.dirty else "no",
+            status.name,
+            status.expected[:12] if status.expected else "-",
+            status.actual[:12] if status.actual else "-",
         )
+        for status in displayed
+    ]
+    if rows:
+        header = ("STATE", "TYPE", "DIRTY", "DEPENDENCY", "EXPECTED", "ACTUAL")
+        widths = [max(len(header[index]), *(len(row[index]) for row in rows)) for index in range(5)]
+        lines.extend(["", "  ".join(f"{header[i]:<{widths[i]}}" for i in range(5)) + "  " + header[5]])
+        for row in rows:
+            lines.append("  ".join(f"{row[i]:<{widths[i]}}" for i in range(5)) + "  " + row[5])
     lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
     if errors:
         lines.append(

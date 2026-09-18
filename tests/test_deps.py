@@ -47,6 +47,26 @@ class DependencyTests(unittest.TestCase):
         self.assertNotIn("DEPENDENCY", format_dependency_doctor(statuses))
         self.assertIn("DEPENDENCY", format_dependency_doctor(statuses, verbose=True))
 
+    def test_verbose_table_aligns_long_dependency_names(self) -> None:
+        statuses = [
+            DependencyStatus(
+                "submodule",
+                "flexiv/lib/flexiv_simulation/thirdparty/flexiv_joint_control/cmake/tools",
+                "/tmp/tools",
+                "065a4fc730c8",
+                "065a4fc730c8",
+                "ok",
+            ),
+            DependencyStatus("external", "proto", "/tmp/proto", "21171bfdfec8", "21171bfdfec8", "ok"),
+        ]
+
+        output = format_dependency_doctor(statuses, verbose=True)
+        first = next(line for line in output.splitlines() if "cmake/tools" in line)
+        second = next(line for line in output.splitlines() if "proto" in line)
+
+        self.assertIn("DEPENDENCY", output)
+        self.assertEqual(first.index("065a4fc730c8"), second.index("21171bfdfec8"))
+
     def test_reads_external_from_direct_source_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             project = Path(tempdir)
