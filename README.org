@@ -45,20 +45,34 @@ created from as recorded in its reflog. The enclosing worktree is marked with
 emits the same data for tools. Use ~fs wt rm <worktree>~ to prune a prunable
 entry.
 
-~fs wt add <branch> from <parent>~ first fetches ~<parent>~ from its remote,
-then creates a worktree directory under the workspace root named after the
-branch with ~/~ replaced by ~-~ (~task/SW-123-fix-thing~ becomes
-~task-SW-123-fix-thing~) and checks out the new branch there. Run
-~fs --project <path> setup~ in the new worktree to initialize submodules and
-configure.
+~fs wt add <branch> from <parent>~ ensures a worktree exists for ~<branch>~
+under the workspace root (folder name is the branch with ~/~ replaced by ~-~)
+and prints exactly one path on stdout. Exit codes: 0 when it created, attached,
+or adopted the worktree, 3 when it already existed, 4 when it refused, 2 for
+usage errors. Notes go to stderr.
+
+- New branch: fetches ~<parent>~ and creates ~<branch>~ from it.
+- Local branch exists: skips the fetch, attaches a worktree at the branch tip,
+  and warns unless ~<parent>~ is already the branch's upstream.
+- Only ~origin/<branch>~ exists: fetches it, creates a tracking local branch
+  from the remote tip, and reports the adopted commit on stderr.
+- Registered worktree exists: prints its path and exits 3 without touching it.
+- The registration is prunable or locked: refuses with a hint to run
+  ~fs wt rm <branch>~ first.
+- The destination folder is taken: refuses and names the occupant.
+
+This makes ~fs wt add~ safe to rerun. Run ~fs --project <path> setup~ afterwards
+to initialize submodules and configure.
 
 ~fs wt rm <worktree>~ asks for confirmation, deletes the worktree directory
 including submodule checkouts, then runs ~git worktree prune~. Locked worktrees
 are unlocked first, the branch is kept, and the main or current worktree is
 never removed.
 
-~fs wt switch <worktree>~ opens a shell inside the selected worktree; exit that
-shell to return.
+~fs wt switch <worktree>~ prints the worktree's absolute path. A program cannot
+change its parent shell's directory, so this only cds when the ~fs~ shell
+wrapper from the [[*Shell integration][Shell integration]] section is installed.
+Without the wrapper, use ~cd "$(fs wt switch task-SW-123-fix-thing)"~.
 
 ~fs deps doctor~ compares direct external repositories (including
 ~external/proto~) with the ~GIT_TAG~ declared in the top-level CMake project,
@@ -77,6 +91,15 @@ the exact commits pinned by the superproject, and are prefetched concurrently.
 They survive linked-worktree removal; warm setup therefore works entirely from
 the local cache without depending on a long-lived checkout.
 
+~fs setup~ applies the same strategy to every ~FlexivAddExternal~ project
+declared by the top-level ~CMakeLists.txt~. Exact commits are fetched once into
+~flexiv-steward/externals-v1~ below the common Git directory, then each worktree
+gets a shallow clone from that cache with ~origin~ restored to the real URL.
+First-time setup still needs the network; later worktrees and version bumps
+reuse the cache, and submodules inside an external are initialized from the
+submodule cache as well. Only top-level declarations are cached; repositories
+that declare further externals themselves are left to CMake.
+
 ~fs gc builds~ deletes build and install artifacts from every other worktree
 in the same Git repository, regardless of age, dirty state, or worktree lock.
 It preserves the enclosing worktree (or the one selected with ~--project~).
@@ -89,6 +112,8 @@ results. Both preview and cleanup display each directory's disk usage and the
 total, measured before deletion. JSON includes ~size_bytes~ keyed by directory
 path and ~total_bytes~.
 
+* Shell integration
+
 Shell completion uses
 [[https://kislyuk.github.io/argcomplete/][argcomplete]] and covers subcommands,
 worktree names/branches for ~wt rm~, ~wt switch~, and ~wt sync~, and branch refs
@@ -100,6 +125,22 @@ eval "$(uvx --from argcomplete register-python-argcomplete fs)"
 
 # zsh: add to ~/.zshrc (after compinit)
 eval "$(uvx --from argcomplete register-python-argcomplete --shell zsh fs)"
+#+end_src
+
+To make ~fs wt switch~ cd in the current shell, add this function below the
+completion line (the completion script invokes ~fs~ without arguments, so
+tab-completion keeps working through the same function):
+
+#+begin_src sh
+fs() {
+  local target
+  if [[ " $* " == *" wt switch "* ]]; then
+    target="$(command fs "$@")" || return $?
+    if [[ -d "$target" ]]; then cd "$target"; else printf '%s\n' "$target"; return 1; fi
+  else
+    command fs "$@"
+  fi
+}
 #+end_src
 
 On TAB, the registered shell function re-runs the real ~fs~ binary with

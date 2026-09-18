@@ -91,6 +91,13 @@ class WorktreeSummary:
 
 
 @dataclass(frozen=True)
+class WorktreeCreation:
+    state: str
+    path: Path
+    note: str | None = None
+
+
+@dataclass(frozen=True)
 class DependencyStatus:
     kind: str
     name: str
@@ -128,6 +135,14 @@ class Handoff:
 
 @dataclass(frozen=True)
 class SubmoduleSpec:
+    name: str
+    path: Path
+    url: str
+    commit: str
+
+
+@dataclass(frozen=True)
+class ExternalSpec:
     name: str
     path: Path
     url: str

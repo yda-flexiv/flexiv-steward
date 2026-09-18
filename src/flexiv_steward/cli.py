@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 
 import argcomplete
@@ -69,10 +67,16 @@ def _worktree_list_command(args: argparse.Namespace) -> int:
 
 
 def _worktree_add_command(args: argparse.Namespace) -> int:
-    destination = add_worktree(discover_project(args.project), args.branch, args.parent)
-    print(f"Created worktree {destination} on branch {args.branch} from {args.parent}.")
-    print(f"Run `fs --project {destination} setup` to initialize submodules and configure.")
-    return 0
+    project = discover_project(args.project)
+    try:
+        result = add_worktree(project, args.branch, args.parent)
+    except (ProjectError, OSError) as error:
+        print(str(error), file=sys.stderr)
+        return 4
+    print(result.path)
+    if result.note:
+        print(result.note, file=sys.stderr)
+    return 3 if result.state == "exists" else 0
 
 
 def _worktree_remove_command(args: argparse.Namespace) -> int:
@@ -91,10 +95,8 @@ def _worktree_remove_command(args: argparse.Namespace) -> int:
 
 
 def _worktree_switch_command(args: argparse.Namespace) -> int:
-    target = resolve_worktree(discover_project(args.project), args.worktree)
-    shell = os.environ.get("SHELL") or "bash"
-    print(f"Entering {target}; exit the shell to return.")
-    return subprocess.run([shell], cwd=target).returncode
+    print(resolve_worktree(discover_project(args.project), args.worktree))
+    return 0
 
 
 def _build_command(args: argparse.Namespace) -> int:
@@ -213,7 +215,10 @@ def build_parser() -> argparse.ArgumentParser:
     wt_list.set_defaults(handler=_worktree_list_command)
     wt_add = worktree_commands.add_parser("add", help="fetch a parent branch and create a worktree for a new branch")
     wt_add.add_argument("branch", help="new branch name, for example task/SW-123-fix-thing")
-    wt_add.add_argument("separator", choices=("from",), metavar="from", help=argparse.SUPPRESS)
+    wt_add.add_argument(
+        "separator", choices=("from",), metavar="from",
+        help="literal keyword separating the branch from its parent",
+    )
     wt_parent = wt_add.add_argument("parent", help="base branch, for example origin/release/v4.2")
     setattr(wt_parent, "completer", _complete_branches)
     wt_add.set_defaults(handler=_worktree_add_command)
@@ -221,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
     wt_remove_worktree = wt_remove.add_argument("worktree", help="worktree directory basename, branch name, or absolute path")
     setattr(wt_remove_worktree, "completer", _complete_worktrees)
     wt_remove.set_defaults(handler=_worktree_remove_command)
-    wt_switch = worktree_commands.add_parser("switch", help="open a shell inside another worktree")
+    wt_switch = worktree_commands.add_parser("switch", help="print another worktree's path for cd")
     wt_switch_worktree = wt_switch.add_argument("worktree", help="worktree directory basename, branch name, or absolute path")
     setattr(wt_switch_worktree, "completer", _complete_worktrees)
     wt_switch.set_defaults(handler=_worktree_switch_command)

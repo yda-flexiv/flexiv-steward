@@ -16,3 +16,8 @@ def source_root(project: Path) -> Path:
 def source_relative_path(project: Path) -> Path:
     """Return the source tree path relative to the Git worktree root."""
     return source_root(project).relative_to(project)
+
+
+def bare_workspace(git_dir: Path) -> Path:
+    """Return the workspace root for a bare Git directory."""
+    return git_dir.parent if git_dir.name == ".git" else git_dir

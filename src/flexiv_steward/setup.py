@@ -9,6 +9,7 @@ from pathlib import Path
 from flexiv_steward.build import BuildProfile, configure_command, profile_preset, run_command
 from flexiv_steward.deps import dependency_doctor, has_dependency_errors
 from flexiv_steward.errors import ProjectError
+from flexiv_steward.externals import initialize_externals
 from flexiv_steward.formatters import format_dependency_doctor
 from flexiv_steward.layout import source_root
 from flexiv_steward.process import merged_environment, run_process
@@ -105,6 +106,7 @@ def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
             f"{source_prefix}cmake --preset {shlex.quote(preset)}",
         ]
         _initialize_submodules(project, dry_run=True)
+        initialize_externals(project, dry_run=True)
         print("$ " + shlex.join(configure))
         print(
             "$ FLEXIV_CLANGD_DB_IN=<preset-build>/compile_commands.json "
@@ -120,6 +122,8 @@ def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
     result = _initialize_submodules(project, dry_run=False)
     if result:
         return result
+    print("Initializing Flexiv external repositories from cache…")
+    initialize_externals(project, dry_run=False)
     # The dispatcher itself lives in the docker submodule, so construct the
     # configure command only after recursive submodules have been populated.
     preset = profile_preset(project, profile)

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from flexiv_steward.errors import ProjectError
-from flexiv_steward.layout import source_root
+from flexiv_steward.layout import bare_workspace, source_root
 from flexiv_steward.models import (
     CMakeContext,
     CompileCommandsContext,
@@ -39,7 +39,7 @@ def discover_project(path: str | Path | None = None) -> Path:
         pass
     git_dir = Path(run_git(candidate, "rev-parse", "--absolute-git-dir")).resolve()
     if run_git(candidate, "rev-parse", "--is-bare-repository") == "true":
-        return git_dir
+        return bare_workspace(git_dir)
     raise ProjectError(f"{candidate} is not inside a Git worktree")
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from flexiv_steward.deps import declared_externals, has_dependency_errors
 from flexiv_steward.formatters import format_dependency_doctor
-from flexiv_steward.models import DependencyStatus
+from flexiv_steward.models import DependencyStatus, ExternalSpec
 
 
 class DependencyTests(unittest.TestCase):
@@ -22,7 +22,14 @@ class DependencyTests(unittest.TestCase):
             )
             self.assertEqual(
                 declared_externals(project),
-                [("flexiv_sw_proto", project / "flexiv" / "external" / "proto", "1bcdef0123456789")],
+                [
+                    ExternalSpec(
+                        "flexiv_sw_proto",
+                        project / "flexiv" / "external" / "proto",
+                        "git@example/proto.git",
+                        "1bcdef0123456789",
+                    )
+                ],
             )
 
     def test_marks_only_version_drift_as_strict_error(self) -> None:
@@ -45,6 +52,7 @@ class DependencyTests(unittest.TestCase):
             project = Path(tempdir)
             (project / "CMakeLists.txt").write_text(
                 "FlexivAddExternal(flexiv_sw_proto\n"
+                "  GIT_URL git@example/proto.git\n"
                 "  GIT_TAG 1bcdef0123456789\n"
                 "  SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/proto\n"
                 ")\n"
@@ -52,5 +60,12 @@ class DependencyTests(unittest.TestCase):
 
             self.assertEqual(
                 declared_externals(project),
-                [("flexiv_sw_proto", project / "external" / "proto", "1bcdef0123456789")],
+                [
+                    ExternalSpec(
+                        "flexiv_sw_proto",
+                        project / "external" / "proto",
+                        "git@example/proto.git",
+                        "1bcdef0123456789",
+                    )
+                ],
             )

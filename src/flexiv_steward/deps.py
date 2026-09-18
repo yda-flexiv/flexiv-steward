@@ -6,16 +6,17 @@ import re
 from pathlib import Path
 
 from flexiv_steward.layout import source_root
-from flexiv_steward.models import DependencyStatus
+from flexiv_steward.models import DependencyStatus, ExternalSpec
 from flexiv_steward.process import run_git
 
 
 _EXTERNAL = re.compile(r"FlexivAddExternal\(\s*(?P<name>[A-Za-z0-9_]+)(?P<body>.*?)\n\)", re.DOTALL)
 _TAG = re.compile(r"\bGIT_TAG\s+(?P<tag>[0-9a-fA-F]{7,40})")
+_URL = re.compile(r"\bGIT_URL\s+(?P<url>\S+)")
 _SOURCE = re.compile(r"\bSOURCE_DIR\s+\$\{CMAKE_SOURCE_DIR\}/(?P<path>[^\s)]+)")
 
 
-def declared_externals(project: Path) -> list[tuple[str, Path, str]]:
+def declared_externals(project: Path) -> list[ExternalSpec]:
     """Read direct external dependencies declared by the top-level CMake project."""
     source_dir = source_root(project)
     cmake = source_dir / "CMakeLists.txt"
@@ -24,9 +25,14 @@ def declared_externals(project: Path) -> list[tuple[str, Path, str]]:
     declared = []
     for match in _EXTERNAL.finditer(cmake.read_text(errors="replace")):
         tag = _TAG.search(match["body"])
+        url = _URL.search(match["body"])
         source = _SOURCE.search(match["body"])
-        if tag and source:
-            declared.append((match["name"], source_dir / source["path"], tag["tag"]))
+        if tag and url and source:
+            declared.append(
+                ExternalSpec(
+                    match["name"], source_dir / source["path"], url["url"], tag["tag"]
+                )
+            )
     return declared
 
 
@@ -66,7 +72,9 @@ def _submodule_statuses(project: Path) -> list[DependencyStatus]:
 
 def dependency_doctor(project: Path) -> list[DependencyStatus]:
     """Return dependency-version and cleanliness status without changing anything."""
-    externals = [_repository_status(name, path, tag) for name, path, tag in declared_externals(project)]
+    externals = [
+        _repository_status(spec.name, spec.path, spec.commit) for spec in declared_externals(project)
+    ]
     return [*externals, *_submodule_statuses(project)]
 
 

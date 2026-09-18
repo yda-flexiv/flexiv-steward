@@ -10,7 +10,8 @@ import shutil
 from typing import TypedDict
 
 from flexiv_steward.errors import ProjectError
-from flexiv_steward.models import WorktreeInfo, WorktreeSummary
+from flexiv_steward.layout import bare_workspace
+from flexiv_steward.models import WorktreeCreation, WorktreeInfo, WorktreeSummary
 from flexiv_steward.process import run_git, run_process
 
 
@@ -234,24 +235,67 @@ def _workspace_root(project: Path) -> Path:
         common = project / common
     common = common.resolve()
     if run_git(common, "rev-parse", "--is-bare-repository") == "true":
-        return common
+        return bare_workspace(common)
     worktrees = parse_worktree_porcelain(run_git(project, "worktree", "list", "--porcelain"))
     return worktrees[0].path if worktrees else project
 
 
-def add_worktree(project: Path, branch: str, parent: str) -> Path:
-    """Fetch *parent*, then create a worktree under the workspace root for a new *branch*."""
+def add_worktree(project: Path, branch: str, parent: str) -> WorktreeCreation:
+    """Create, attach, or adopt a worktree for *branch* under the workspace root."""
+    worktrees = parse_worktree_porcelain(run_git(project, "worktree", "list", "--porcelain"))
+    existing = next((item for item in worktrees if item.branch == branch), None)
+    if existing is not None:
+        if existing.prunable:
+            raise ProjectError(f"worktree {existing.path} is prunable; run `fs wt rm {branch}` first")
+        if existing.locked:
+            raise ProjectError(f"worktree {existing.path} is locked; run `fs wt rm {branch}` first")
+        return WorktreeCreation("exists", existing.path)
     destination = _workspace_root(project) / branch.replace("/", "-")
     if destination.exists():
-        raise ProjectError(f"destination already exists: {destination}")
+        occupant = next(
+            (item for item in worktrees if item.path.resolve() == destination.resolve()), None
+        )
+        if occupant and occupant.branch:
+            detail = f"worktree on branch {occupant.branch}"
+        elif occupant:
+            detail = "another worktree"
+        else:
+            detail = "a non-Git directory"
+        raise ProjectError(f"refusing to create {destination}: already occupied by {detail}")
+    if _branch_exists(project, branch):
+        note = None
+        if _branch_upstreams(project).get(branch) != parent:
+            note = f"using existing branch {branch}; from {parent} not used"
+        run_process(
+            ["git", "worktree", "add", str(destination), branch],
+            project, timeout=300, check=True,
+        )
+        return WorktreeCreation("attached", destination, note)
+    probe = run_process(["git", "ls-remote", "--heads", "origin", branch], project, timeout=600)
+    if probe.returncode:
+        raise ProjectError(f"git ls-remote --heads origin {branch} failed in {project}: {probe.output}")
+    if probe.stdout.strip():
+        run_process(["git", "fetch", "origin", branch], project, timeout=600, check=True)
+        run_process(
+            ["git", "worktree", "add", "--track", "-b", branch, str(destination), f"origin/{branch}"],
+            project, timeout=300, check=True,
+        )
+        subject = run_git(project, "log", "-1", "--format=%h %s", f"origin/{branch}")
+        note = f"adopted origin/{branch} @ {subject}; from {parent} not used"
+        return WorktreeCreation("adopted", destination, note)
     run_process(["git", *fetch_command(parent)], project, timeout=600, check=True)
     run_process(
         ["git", "worktree", "add", "-b", branch, str(destination), parent],
-        project,
-        timeout=300,
-        check=True,
+        project, timeout=300, check=True,
     )
-    return destination
+    return WorktreeCreation("created", destination)
+
+
+def _branch_exists(project: Path, branch: str) -> bool:
+    result = run_process(["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], project)
+    if result.returncode not in {0, 1}:
+        raise ProjectError(f"git show-ref failed in {project}: {result.output}")
+    return result.returncode == 0
 
 
 def plan_worktree_removal(project: Path, identifier: str) -> Path:
