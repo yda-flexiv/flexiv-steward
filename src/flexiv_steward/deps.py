@@ -80,3 +80,13 @@ def dependency_doctor(project: Path) -> list[DependencyStatus]:
 
 def has_dependency_errors(statuses: list[DependencyStatus]) -> bool:
     return any(status.state != "ok" for status in statuses)
+
+
+def has_blocking_errors(statuses: list[DependencyStatus]) -> bool:
+    """Errors that must stop a build. A dirty checkout means local edits were
+    made on purpose, so local code wins over the declared revision: warn only."""
+    return any(
+        status.state in {"missing", "uninitialized", "conflicted"}
+        or (status.state == "mismatch" and not status.dirty)
+        for status in statuses
+    )

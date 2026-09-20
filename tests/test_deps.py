@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from flexiv_steward.deps import declared_externals, has_dependency_errors
+from flexiv_steward.deps import declared_externals, has_blocking_errors, has_dependency_errors
 from flexiv_steward.formatters import format_dependency_doctor
 from flexiv_steward.models import DependencyStatus, ExternalSpec
 
@@ -38,9 +38,25 @@ class DependencyTests(unittest.TestCase):
             DependencyStatus("external", "base", "/tmp/base", "abc", "abc", "ok", dirty=True),
         ]
         self.assertTrue(has_dependency_errors(statuses))
+        self.assertTrue(has_blocking_errors(statuses))
         output = format_dependency_doctor(statuses)
         self.assertIn("Do not build", output)
         self.assertIn("fs setup <profile>", output)
+
+    def test_dirty_mismatch_only_warns_instead_of_blocking(self) -> None:
+        statuses = [
+            DependencyStatus("external", "base", "/tmp/base", "720", "9a0", "mismatch", dirty=True),
+        ]
+        self.assertTrue(has_dependency_errors(statuses))
+        self.assertFalse(has_blocking_errors(statuses))
+        output = format_dependency_doctor(statuses)
+        self.assertNotIn("Do not build", output)
+        self.assertIn("override the declared revisions", output)
+
+    def test_missing_and_conflicted_always_block(self) -> None:
+        for state in ("missing", "uninitialized", "conflicted"):
+            statuses = [DependencyStatus("submodule", "tools", "/tmp/tools", None, None, state, dirty=True)]
+            self.assertTrue(has_blocking_errors(statuses), state)
 
     def test_compacts_clean_output_unless_verbose(self) -> None:
         statuses = [DependencyStatus("submodule", "proto", "/tmp/proto", "abc", "abc", "ok")]

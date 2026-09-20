@@ -12,7 +12,7 @@ from flexiv_steward.branchdiff import _branchdiff_command
 from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
 from flexiv_steward.context import collect_context
 from flexiv_steward.context import discover_project
-from flexiv_steward.deps import dependency_doctor, has_dependency_errors
+from flexiv_steward.deps import dependency_doctor, has_blocking_errors, has_dependency_errors
 from flexiv_steward.errors import ProjectError
 from flexiv_steward.formatters import (
     _gib,
@@ -103,9 +103,11 @@ def _build_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
     if not args.skip_deps_check:
         statuses = dependency_doctor(project)
-        if has_dependency_errors(statuses):
+        if has_blocking_errors(statuses):
             print(format_dependency_doctor(statuses), file=sys.stderr)
             return 1
+        if has_dependency_errors(statuses):
+            print(format_dependency_doctor(statuses), file=sys.stderr)
     profile = resolve_profile(args.profile, args.preset)
     if args.configure:
         result = run_command(configure_command(project, profile), project, args.dry_run)

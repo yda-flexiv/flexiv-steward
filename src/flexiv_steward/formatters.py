@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 from datetime import datetime
 
+from flexiv_steward.deps import has_blocking_errors
 from flexiv_steward.models import (
     DependencyStatus,
     Handoff,
@@ -125,11 +126,16 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
         for row in rows:
             lines.append("  ".join(f"{row[i]:<{widths[i]}}" for i in range(5)) + "  " + row[5])
     lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
-    if errors:
+    if has_blocking_errors(statuses):
         lines.append(
             "Do not build until mismatches are corrected. Run `fs setup <profile>` "
             "(for example, `fs setup rca`) to reconfigure and restore CMake-managed externals, "
             "then re-run the build."
+        )
+    elif errors:
+        lines.append(
+            "Local changes in dirty dependencies override the declared revisions; "
+            "the build uses them as-is."
         )
     elif bootstrap:
         lines.append("Run `fs setup <profile>` to initialize submodules and CMake-managed external repositories.")
