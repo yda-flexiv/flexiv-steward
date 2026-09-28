@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from flexiv_steward.build import resolve_profile
+from flexiv_steward.presets import Preset
 from flexiv_steward.setup import (
     configure_editor_files,
     setup_worktree,
@@ -20,7 +20,7 @@ class SetupTests(unittest.TestCase):
     def test_dry_run_prints_bootstrap_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             project = Path(tempdir)
-            self.assertEqual(setup_worktree(project, resolve_profile("rca"), dry_run=True), 0)
+            self.assertEqual(setup_worktree(project, Preset("rca", "ubuntu", "rca"), dry_run=True), 0)
 
     def test_initializes_dispatcher_submodule_before_building_configure_command(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -38,7 +38,7 @@ class SetupTests(unittest.TestCase):
                 patch("flexiv_steward.setup.configure_editor_files"),
                 patch("flexiv_steward.setup.dependency_doctor", return_value=[]),
             ):
-                self.assertEqual(setup_worktree(project, resolve_profile("rca"), dry_run=False), 0)
+                self.assertEqual(setup_worktree(project, Preset("rca", "ubuntu", "rca"), dry_run=False), 0)
 
             self.assertIn("docker/docker_dispatch.sh", run_command.call_args.args[0])
 

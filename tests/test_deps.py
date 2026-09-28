@@ -41,7 +41,7 @@ class DependencyTests(unittest.TestCase):
         self.assertTrue(has_blocking_errors(statuses))
         output = format_dependency_doctor(statuses)
         self.assertIn("Do not build", output)
-        self.assertIn("fs setup <profile>", output)
+        self.assertIn("fs setup <preset>", output)
 
     def test_dirty_mismatch_only_warns_instead_of_blocking(self) -> None:
         statuses = [

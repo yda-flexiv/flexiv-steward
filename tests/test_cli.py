@@ -37,7 +37,7 @@ class CliTests(unittest.TestCase):
     def test_help_and_parser_errors_have_cli_exit_codes(self) -> None:
         code, stdout, stderr = self._invoke("--help")
         self.assertEqual(code, 0)
-        self.assertIn("{context,wt,deps,build,setup,gc,test,session,branchdiff}", stdout)
+        self.assertIn("{context,wt,deps,preset,build,setup,gc,test,session,branchdiff}", stdout)
         self.assertEqual(stderr, "")
 
         code, stdout, stderr = self._invoke("--not-an-option")
@@ -62,14 +62,33 @@ class CliTests(unittest.TestCase):
         (self.project / "flexiv").mkdir()
         (self.project / "docker").mkdir()
         (self.project / "docker" / "docker_dispatch.sh").touch()
+        (self.project / "flexiv" / "CMakePresets.json").write_text(json.dumps({
+            "configurePresets": [{"name": "debug; echo unsafe", "binaryDir": "${sourceDir}/build"}],
+            "buildPresets": [{"name": "build; echo unsafe", "configurePreset": "debug; echo unsafe"}],
+        }))
         code, stdout, stderr = self._invoke(
-            "--project", str(self.project), "build", "custom", "--preset", "debug; echo unsafe", "--configure", "--dry-run"
+            "--project", str(self.project), "build", "build; echo unsafe", "--configure", "--dry-run"
         )
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
         commands = [shlex.split(line.removeprefix("$ ")) for line in stdout.splitlines()]
         self.assertEqual(commands[0][-1], "cd flexiv && cmake --preset 'debug; echo unsafe'")
-        self.assertEqual(commands[1][-1], "cd flexiv && cmake --build --preset 'debug; echo unsafe'")
+        self.assertEqual(commands[1][-1], "cd flexiv && cmake --build --preset 'build; echo unsafe'")
+
+    def test_preset_list_reports_worktree_presets(self) -> None:
+        (self.project / "CMakePresets.json").write_text(json.dumps({
+            "configurePresets": [{"name": "base", "hidden": True}, {"name": "ubuntu-static-check"}],
+            "buildPresets": [{"name": "ubuntu-static-check", "configurePreset": "ubuntu-static-check"}],
+        }))
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "list", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), {
+            "configure": ["ubuntu-static-check"], "build": ["ubuntu-static-check"]
+        })
+
+        code, _, stderr = self._invoke("--project", str(self.project), "build", "rca", "--dry-run")
+        self.assertEqual(code, 2)
+        self.assertIn("fs preset list", stderr)
 
     def _add_worktree(self, name: str = "other") -> Path:
         path = self.project / name

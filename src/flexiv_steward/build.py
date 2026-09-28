@@ -2,42 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import shlex
-from dataclasses import dataclass
 from pathlib import Path
 
 from flexiv_steward.errors import ProjectError
 from flexiv_steward.layout import source_relative_path, source_root
+from flexiv_steward.presets import Preset
 from flexiv_steward.process import run_process
-
-
-@dataclass(frozen=True)
-class BuildProfile:
-    name: str
-    platform: str
-    preset: str
-    description: str
-
-
-PROFILES = {
-    "all": BuildProfile("all", "ubuntu", "ubuntu-relwithdebinfo-g1-All", "all Ubuntu applications, tests, tools, and examples"),
-    "rca": BuildProfile("rca", "ubuntu", "ubuntu-relwithdebinfo-g1-RCA", "RobotControlApp"),
-    "ui": BuildProfile("ui", "ubuntu", "ubuntu-relwithdebinfo-g1-UI", "UI application"),
-    "debug": BuildProfile("debug", "ubuntu", "ubuntu-debug", "Ubuntu Debug build"),
-    "yocto-all": BuildProfile("yocto-all", "yocto", "yocto-relwithdebinfo-g1-All", "all Yocto targets"),
-}
-
-
-def resolve_profile(name: str, preset: str | None = None) -> BuildProfile:
-    """Return a named profile or derive one from an explicitly supplied preset."""
-    if preset:
-        return BuildProfile(name, "yocto" if preset.startswith("yocto-") else "ubuntu", preset, "custom preset")
-    try:
-        return PROFILES[name]
-    except KeyError as error:
-        choices = ", ".join(PROFILES)
-        raise ProjectError(f"unknown build profile '{name}'; choose one of: {choices}") from error
 
 
 def _dispatcher(project: Path) -> Path:
@@ -47,30 +18,6 @@ def _dispatcher(project: Path) -> Path:
     return dispatcher
 
 
-def profile_preset(project: Path, profile: BuildProfile) -> str:
-    """Return the preset matching *profile* in a wrapper or direct source tree."""
-    preset_file = source_root(project) / "CMakePresets.json"
-    if not preset_file.is_file():
-        return profile.preset
-    try:
-        available = {
-            preset["name"]
-            for preset in json.loads(preset_file.read_text()).get("configurePresets", [])
-        }
-    except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise ProjectError(f"could not read CMake presets: {preset_file}") from error
-    if profile.preset in available:
-        return profile.preset
-    direct_fallbacks = {
-        "all": "ubuntu-relwithdebinfo-g1",
-        "yocto-all": "yocto-relwithdebinfo-g1",
-    }
-    fallback = direct_fallbacks.get(profile.name)
-    if fallback is not None and source_root(project) == project and fallback in available:
-        return fallback
-    return profile.preset
-
-
 def _source_shell_command(project: Path, command: str) -> str:
     relative = source_relative_path(project)
     if relative == Path("."):
@@ -78,36 +25,23 @@ def _source_shell_command(project: Path, command: str) -> str:
     return f"cd {shlex.quote(str(relative))} && {command}"
 
 
-def configure_command(project: Path, profile: BuildProfile) -> list[str]:
-    """Build the command that configures a CMake preset in the Docker harness."""
+def configure_command(project: Path, preset: Preset) -> list[str]:
+    """Configure the preset named by a build or setup request in Docker."""
     _dispatcher(project)
-    preset = profile_preset(project, profile)
     return [
-        "bash",
-        "docker/docker_dispatch.sh",
-        "exec",
-        profile.platform,
-        "bash",
-        "-c",
-        _source_shell_command(project, f"cmake --preset {shlex.quote(preset)}"),
+        "bash", "docker/docker_dispatch.sh", "exec", preset.platform, "bash", "-c",
+        _source_shell_command(project, f"cmake --preset {shlex.quote(preset.configure_name)}"),
     ]
 
 
-def build_command(project: Path, profile: BuildProfile, targets: list[str]) -> list[str]:
-    """Build an incremental CMake preset in the Docker execution container."""
+def build_command(project: Path, preset: Preset, targets: list[str]) -> list[str]:
+    """Build an incremental CMake build preset in Docker."""
     _dispatcher(project)
-    preset = profile_preset(project, profile)
     target_args = " ".join(f"--target {shlex.quote(target)}" for target in targets)
     return [
-        "bash",
-        "docker/docker_dispatch.sh",
-        "exec",
-        profile.platform,
-        "bash",
-        "-c",
+        "bash", "docker/docker_dispatch.sh", "exec", preset.platform, "bash", "-c",
         _source_shell_command(
-            project,
-            f"cmake --build --preset {shlex.quote(preset)} {target_args}".rstrip(),
+            project, f"cmake --build --preset {shlex.quote(preset.name)} {target_args}".rstrip()
         ),
     ]
 
@@ -121,7 +55,7 @@ def workflow_test_command(project: Path) -> list[str]:
 
 
 def run_command(command: list[str], project: Path, dry_run: bool) -> int:
-    """Echo a reproducible command and execute it only when requested."""
+    """Echo a reproducible command and execute only when requested."""
     print("$ " + shlex.join(command))
     if dry_run:
         return 0

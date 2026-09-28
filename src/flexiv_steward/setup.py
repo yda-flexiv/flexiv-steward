@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import shlex
 from pathlib import Path
 
-from flexiv_steward.build import BuildProfile, configure_command, profile_preset, run_command
+from flexiv_steward.build import configure_command, run_command
 from flexiv_steward.deps import dependency_doctor, has_dependency_errors
 from flexiv_steward.errors import ProjectError
 from flexiv_steward.externals import initialize_externals
 from flexiv_steward.formatters import format_dependency_doctor
 from flexiv_steward.layout import source_root
 from flexiv_steward.process import merged_environment, run_process
+from flexiv_steward.presets import Preset, compile_commands_path
 from flexiv_steward.submodules import initialize_submodules
 
 
@@ -23,35 +23,7 @@ def _initialize_submodules(project: Path, dry_run: bool) -> int:
 
 def compile_commands_source(project: Path, preset_name: str) -> Path:
     """Return the compile database path configured by *preset_name*."""
-    source_dir = source_root(project)
-    preset_file = source_dir / "CMakePresets.json"
-    try:
-        presets = json.loads(preset_file.read_text()).get("configurePresets", [])
-    except (OSError, json.JSONDecodeError) as error:
-        raise ProjectError(f"could not read CMake presets: {preset_file}") from error
-    by_name = {preset.get("name"): preset for preset in presets}
-
-    def binary_dir(name: str, seen: set[str] | None = None) -> str | None:
-        seen = seen or set()
-        if name in seen:
-            raise ProjectError(f"cyclic CMake preset inheritance involving '{name}'")
-        preset = by_name.get(name)
-        if not preset:
-            raise ProjectError(f"CMake configure preset '{name}' was not found in {preset_file}")
-        if isinstance(value := preset.get("binaryDir"), str):
-            return value
-        inherited = preset.get("inherits", [])
-        if isinstance(inherited, str):
-            inherited = [inherited]
-        for parent in inherited:
-            if value := binary_dir(parent, seen | {name}):
-                return value
-        return None
-
-    configured_dir = binary_dir(preset_name)
-    if not configured_dir:
-        raise ProjectError(f"CMake configure preset '{preset_name}' has no binaryDir")
-    return Path(configured_dir.replace("${sourceDir}", str(source_dir))) / "compile_commands.json"
+    return compile_commands_path(project, preset_name)
 
 
 def configure_editor_files(project: Path, preset_name: str) -> None:
@@ -90,20 +62,19 @@ def configure_editor_files(project: Path, preset_name: str) -> None:
     print("Created .projectile.")
 
 
-def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
+def setup_worktree(project: Path, preset: Preset, dry_run: bool) -> int:
     """Initialize submodules, configure external repositories, then verify versions."""
     if dry_run:
-        preset = profile_preset(project, profile)
         source_dir = source_root(project)
         source_prefix = "" if source_dir == project else f"cd {shlex.quote(str(source_dir.relative_to(project)))} && "
         configure = [
             "bash",
             "docker/docker_dispatch.sh",
             "exec",
-            profile.platform,
+            preset.platform,
             "bash",
             "-c",
-            f"{source_prefix}cmake --preset {shlex.quote(preset)}",
+            f"{source_prefix}cmake --preset {shlex.quote(preset.name)}",
         ]
         _initialize_submodules(project, dry_run=True)
         initialize_externals(project, dry_run=True)
@@ -126,13 +97,12 @@ def setup_worktree(project: Path, profile: BuildProfile, dry_run: bool) -> int:
     initialize_externals(project, dry_run=False)
     # The dispatcher itself lives in the docker submodule, so construct the
     # configure command only after recursive submodules have been populated.
-    preset = profile_preset(project, profile)
-    configure = configure_command(project, profile)
-    print(f"Configuring {profile.name} ({preset})…")
+    configure = configure_command(project, preset)
+    print(f"Configuring {preset.name}…")
     result = run_command(configure, project, dry_run=False)
     if result:
         return result
-    configure_editor_files(project, preset)
+    configure_editor_files(project, preset.name)
     statuses = dependency_doctor(project)
     print(format_dependency_doctor(statuses))
     if has_dependency_errors(statuses):

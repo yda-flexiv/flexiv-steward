@@ -128,8 +128,8 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
     lines.append(f"\n{errors} version errors; {bootstrap} bootstrap required; {dirty} dirty checkouts.")
     if has_blocking_errors(statuses):
         lines.append(
-            "Do not build until mismatches are corrected. Run `fs setup <profile>` "
-            "(for example, `fs setup rca`) to reconfigure and restore CMake-managed externals, "
+            "Do not build until mismatches are corrected. Run `fs setup <preset>` "
+            "(choose one with `fs preset list`) to reconfigure and restore CMake-managed externals, "
             "then re-run the build."
         )
     elif errors:
@@ -138,7 +138,7 @@ def format_dependency_doctor(statuses: list[DependencyStatus], verbose: bool = F
             "the build uses them as-is."
         )
     elif bootstrap:
-        lines.append("Run `fs setup <profile>` to initialize submodules and CMake-managed external repositories.")
+        lines.append("Run `fs setup <preset>` to initialize submodules and CMake-managed external repositories.")
     elif dirty:
         lines.append("Dirty dependencies are allowed, but reduce build reproducibility.")
     elif not verbose:

@@ -13,11 +13,12 @@ fs wt switch task-SW-123-fix-thing
 fs wt rm task-SW-123-fix-thing
 fs wt sync RemoveSync2 --dry-run
 fs deps doctor --strict
-fs setup rca --dry-run
+fs preset list
+fs setup ubuntu-relwithdebinfo-g1 --dry-run
 fs gc builds --dry-run
 fs gc builds
-fs build all --configure
-fs build rca --target RobotControlApp
+fs build ubuntu-relwithdebinfo-g1 --configure
+fs build ubuntu-static-check --configure --target FlexivSwClangTidyCheck
 fs test workflow --dry-run
 fs session handoff --days 3
 #+end_src
@@ -61,8 +62,8 @@ usage errors. Notes go to stderr.
   ~fs wt rm <branch>~ first.
 - The destination folder is taken: refuses and names the occupant.
 
-This makes ~fs wt add~ safe to rerun. Run ~fs --project <path> setup~ afterwards
-to initialize submodules and configure.
+This makes ~fs wt add~ safe to rerun. Run ~fs --project <path> preset list~ to choose a configure preset, then
+~fs --project <path> setup <preset>~ to initialize submodules and configure.
 
 ~fs wt rm <worktree>~ asks for confirmation, deletes the worktree directory
 including submodule checkouts, then runs ~git worktree prune~. Locked worktrees
@@ -81,7 +82,8 @@ preflight to fail on missing or mismatched revisions. ~fs build~ runs the same
 version check by default; ~--skip-deps-check~ is an explicit escape hatch. Add
 ~--verbose~ to list every clean dependency revision.
 
-For a newly created worktree, use ~fs setup rca~ (or another profile). It
+For a newly created worktree, use ~fs preset list~ to inspect the checkout's
+CMake presets, then ~fs setup <configure-preset>~. It
 initializes recursive submodules, runs CMake configure so declared externals
 are checked out, and then verifies all dependency revisions.
 
@@ -167,6 +169,9 @@ build-directory results.
 Both configure and build run through ~docker/docker_dispatch.sh exec <platform>
 bash -c~, from the CMake source directory. Steward detects both the ~flexiv_sw~
 wrapper layout (source under ~flexiv/~) and a direct ~flexiv_sw_base~ worktree
-(source at the repository root). In a direct base worktree, the ~all~ and
-~yocto-all~ profiles select the corresponding ~*-relwithdebinfo-g1~ presets.
-This keeps CMake configure and incremental builds in the same Docker environment.
+(source at the repository root). ~fs setup~ takes a configure preset; ~fs build~
+takes a build preset. With ~--configure~, ~fs build~ first configures the
+~configurePreset~ named by that build preset. ~fs preset list~ shows both groups,
+including names from ~CMakeUserPresets.json~. Use ~--json~ for machine-readable
+output. Preset names come from the selected worktree; there is no separate
+~all~/~rca~/~ui~ profile mapping.

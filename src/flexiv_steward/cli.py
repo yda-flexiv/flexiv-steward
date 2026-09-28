@@ -9,7 +9,7 @@ import sys
 import argcomplete
 
 from flexiv_steward.branchdiff import _branchdiff_command
-from flexiv_steward.build import build_command, configure_command, resolve_profile, run_command, workflow_test_command
+from flexiv_steward.build import build_command, configure_command, run_command, workflow_test_command
 from flexiv_steward.context import collect_context
 from flexiv_steward.context import discover_project
 from flexiv_steward.deps import dependency_doctor, has_blocking_errors, has_dependency_errors
@@ -25,6 +25,7 @@ from flexiv_steward.formatters import (
 )
 from flexiv_steward.gc import clean_builds
 from flexiv_steward.process import run_git
+from flexiv_steward.presets import build_preset, configure_preset, list_presets
 from flexiv_steward.serialization import to_jsonable
 from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
@@ -101,6 +102,7 @@ def _worktree_switch_command(args: argparse.Namespace) -> int:
 
 def _build_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
+    preset = build_preset(project, args.preset)
     if not args.skip_deps_check:
         statuses = dependency_doctor(project)
         if has_blocking_errors(statuses):
@@ -108,12 +110,11 @@ def _build_command(args: argparse.Namespace) -> int:
             return 1
         if has_dependency_errors(statuses):
             print(format_dependency_doctor(statuses), file=sys.stderr)
-    profile = resolve_profile(args.profile, args.preset)
     if args.configure:
-        result = run_command(configure_command(project, profile), project, args.dry_run)
+        result = run_command(configure_command(project, preset), project, args.dry_run)
         if result:
             return result
-    return run_command(build_command(project, profile, args.target), project, args.dry_run)
+    return run_command(build_command(project, preset, args.target), project, args.dry_run)
 
 
 def _test_workflow_command(args: argparse.Namespace) -> int:
@@ -148,8 +149,31 @@ def _dependency_doctor_command(args: argparse.Namespace) -> int:
 
 def _setup_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
-    profile = resolve_profile(args.profile, args.preset)
-    return setup_worktree(project, profile, args.dry_run)
+    preset = configure_preset(project, args.preset)
+    return setup_worktree(project, preset, args.dry_run)
+
+
+def _preset_list_command(args: argparse.Namespace) -> int:
+    presets = list_presets(discover_project(args.project))
+    if args.json:
+        print(json.dumps(presets, indent=2))
+    else:
+        for kind in ("configure", "build"):
+            print(f"{kind.capitalize()} presets:")
+            for name in presets[kind]:
+                print(f"  {name}")
+    return 0
+
+
+def _complete_presets(
+    prefix: str = "", parsed_args: argparse.Namespace | None = None, **_: object
+) -> list[str]:
+    try:
+        project = discover_project(parsed_args.project if parsed_args else None)
+        kind = "build" if parsed_args and parsed_args.command == "build" else "configure"
+        return [name for name in list_presets(project)[kind] if name.startswith(prefix)]
+    except (ProjectError, OSError):
+        return []
 
 
 def _gc_builds_command(args: argparse.Namespace) -> int:
@@ -239,17 +263,22 @@ def build_parser() -> argparse.ArgumentParser:
     dependency_doctor_parser.add_argument("--verbose", action="store_true", help="show every checked dependency revision")
     dependency_doctor_parser.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     dependency_doctor_parser.set_defaults(handler=_dependency_doctor_command)
-    build = subcommands.add_parser("build", help="configure and build a Docker/CMake profile")
-    build.add_argument("profile", nargs="?", default="all", help="all, rca, ui, debug, or yocto-all")
-    build.add_argument("--preset", help="use a CMake preset instead of a named profile")
+    preset = subcommands.add_parser("preset", help="inspect CMake presets in the current worktree")
+    preset_commands = preset.add_subparsers(dest="preset_command", required=True)
+    preset_list = preset_commands.add_parser("list", help="list available configure and build presets")
+    preset_list.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    preset_list.set_defaults(handler=_preset_list_command)
+    build = subcommands.add_parser("build", help="build a CMake preset in Docker")
+    build_name = build.add_argument("preset", help="CMake build preset name")
+    setattr(build_name, "completer", _complete_presets)
     build.add_argument("--configure", action="store_true", help="configure the preset before building")
     build.add_argument("--target", action="append", default=[], help="CMake target to build; may be repeated")
     build.add_argument("--skip-deps-check", action="store_true", help="do not block the build on dependency revision drift")
     build.add_argument("--dry-run", action="store_true", help="print commands without executing them")
     build.set_defaults(handler=_build_command)
     setup = subcommands.add_parser("setup", help="bootstrap a new worktree and verify dependency revisions")
-    setup.add_argument("profile", nargs="?", default="rca", help="all, rca, ui, debug, or yocto-all")
-    setup.add_argument("--preset", help="use a CMake preset instead of a named profile")
+    setup_name = setup.add_argument("preset", help="CMake configure preset name")
+    setattr(setup_name, "completer", _complete_presets)
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)
     gc = subcommands.add_parser("gc", help="clean worktree build artifacts")
