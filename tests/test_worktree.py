@@ -61,6 +61,41 @@ class WorktreeCommandTests(unittest.TestCase):
         subprocess.run(["git", "fetch", "-q", "origin"], cwd=hub, check=True)
         return hub, f"origin/{branch}"
 
+    def _make_dotbare_hub(self, root: Path) -> tuple[Path, str]:
+        hub = root / "flexiv_sw"
+        hub.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", str(hub / ".bare")], check=True)
+        (hub / ".git").write_text("gitdir: ./.bare\n")
+        seed = root / "seed"
+        seed.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=seed, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=seed, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=seed, check=True)
+        (seed / "README.md").write_text("test")
+        subprocess.run(["git", "add", "README.md"], cwd=seed, check=True)
+        subprocess.run(["git", "commit", "-qm", "initial"], cwd=seed, check=True)
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=seed, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        subprocess.run(["git", "remote", "add", "origin", str(hub / ".bare")], cwd=seed, check=True)
+        subprocess.run(["git", "push", "-q", "origin", branch], cwd=seed, check=True)
+        subprocess.run(["git", "remote", "add", "origin", str(seed)], cwd=hub, check=True)
+        subprocess.run(["git", "fetch", "-q", "origin"], cwd=hub, check=True)
+        return hub, f"origin/{branch}"
+
+    def test_dotbare_hub_adds_worktrees_beside_the_git_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            hub, parent = self._make_dotbare_hub(root)
+
+            self.assertEqual(discover_project(hub), hub)
+
+            destination = add_worktree(hub, "task/SW-9", parent)
+
+            self.assertEqual(destination.state, "created")
+            self.assertEqual(destination.path, hub / "task-SW-9")
+            self.assertTrue((destination.path / "README.md").is_file())
+
     def test_dotgit_bare_hub_adds_worktrees_beside_the_git_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

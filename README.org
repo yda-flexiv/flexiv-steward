@@ -114,6 +114,18 @@ results. Both preview and cleanup display each directory's disk usage and the
 total, measured before deletion. JSON includes ~size_bytes~ keyed by directory
 path and ~total_bytes~.
 
+~fs gc worktrees --base origin/main~ previews linked worktrees whose HEAD is
+contained in the specified base ref, whose last activity is at least 30 days
+old, and whose working tree has no tracked, untracked, or ignored changes.
+Use ~--older-than DAYS~ to change the age threshold, ~--json~ for a machine
+readable inventory, and ~--apply~ to remove eligible worktrees. The command
+keeps the current and main worktrees, locked or detached worktrees, and local
+branches. It rechecks each candidate before removal and never uses Git's
+~--force~ option. Worktrees with initialized submodules are listed but skipped
+because Git requires force to remove them. Run ~git fetch --prune~ first if the base is a remote ref;
+the command does not fetch. Squash and rebase PR merges are not inferred from
+local ancestry, so those worktrees remain for manual review.
+
 * Shell integration
 
 Shell completion uses

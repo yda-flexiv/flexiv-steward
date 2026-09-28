@@ -19,5 +19,10 @@ def source_relative_path(project: Path) -> Path:
 
 
 def bare_workspace(git_dir: Path) -> Path:
-    """Return the workspace root for a bare Git directory."""
-    return git_dir.parent if git_dir.name == ".git" else git_dir
+    """Return the workspace root for a bare Git directory.
+
+    A hidden bare directory (``.git``, ``.bare``) is a hub whose worktrees live
+    beside it under its parent. Any other bare directory owns its worktrees
+    directly.
+    """
+    return git_dir.parent if git_dir.name.startswith(".") else git_dir

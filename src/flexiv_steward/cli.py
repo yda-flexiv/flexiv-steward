@@ -23,7 +23,7 @@ from flexiv_steward.formatters import (
     format_worktree_doctor,
     format_worktree_list,
 )
-from flexiv_steward.gc import clean_builds
+from flexiv_steward.gc import clean_builds, gc_worktrees
 from flexiv_steward.process import run_git
 from flexiv_steward.presets import build_preset, configure_preset, list_presets
 from flexiv_steward.serialization import to_jsonable
@@ -191,6 +191,23 @@ def _gc_builds_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gc_worktrees_command(args: argparse.Namespace) -> int:
+    result = gc_worktrees(discover_project(args.project), args.base, args.older_than, args.apply)
+    if args.json:
+        print(json.dumps(to_jsonable(result), indent=2, sort_keys=True))
+    else:
+        action = "Removed" if args.apply else "Would remove"
+        for item in result.items:
+            size = _gib(item.size_bytes) if item.size_bytes is not None else "size unknown"
+            if item.eligible:
+                print(f"{action}: {item.path} [{item.branch}] ({size})")
+            else:
+                print(f"Keeping: {item.path} [{item.branch or 'detached'}] ({size}; {', '.join(item.reasons)})")
+        print(f"{action} {len(result.removed) if args.apply else sum(item.eligible for item in result.items)} "
+              "worktrees; local branches were kept.")
+    return 0
+
+
 def _complete_worktrees(
     prefix: str = "", parsed_args: argparse.Namespace | None = None, **_: object
 ) -> list[str]:
@@ -281,7 +298,7 @@ def build_parser() -> argparse.ArgumentParser:
     setattr(setup_name, "completer", _complete_presets)
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)
-    gc = subcommands.add_parser("gc", help="clean worktree build artifacts")
+    gc = subcommands.add_parser("gc", help="clean worktrees and build artifacts")
     gc_commands = gc.add_subparsers(dest="gc_command", required=True)
     gc_builds = gc_commands.add_parser(
         "builds", help="remove build/install artifacts from every other worktree"
@@ -295,6 +312,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit JSON for tools and agents",
     )
     gc_builds.set_defaults(handler=_gc_builds_command)
+    gc_trees = gc_commands.add_parser(
+        "worktrees", help="preview old, clean worktrees merged into a target ref"
+    )
+    gc_trees.add_argument("--base", help="target branch or remote-tracking ref; required with --apply")
+    gc_trees.add_argument("--older-than", type=int, default=30, metavar="DAYS",
+                          help="minimum days since last worktree activity (default: 30)")
+    gc_trees.add_argument("--apply", action="store_true", help="remove eligible worktrees after rechecking")
+    gc_trees.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    gc_trees.set_defaults(handler=_gc_worktrees_command)
     test = subcommands.add_parser("test", help="run project test workflows")
     test_commands = test.add_subparsers(dest="test_command", required=True)
     workflow = test_commands.add_parser("workflow", help="run the WorkflowTest integration runner")
