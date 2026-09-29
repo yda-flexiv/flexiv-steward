@@ -92,3 +92,20 @@ class ExternalCacheTests(unittest.TestCase):
 
             self.assertEqual(self._git(checkout, "cat-file", "-t", older), "commit")
             self.assertEqual(self._git(checkout, "remote", "get-url", "origin"), str(remote))
+
+    def test_existing_checkout_at_cached_commit_does_not_fetch_current_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            remote, older, _ = self._make_remote(root)
+            project = self._make_project(root, remote, older)
+
+            initialize_externals(project, dry_run=False)
+            checkout = project / "flexiv" / "external" / "flexiv_sw_base"
+            branch = self._git(checkout, "branch", "--show-current")
+            self.assertEqual(branch, f"flexiv-steward-{older}")
+
+            remote.rename(root / "remote-offline.git")
+            initialize_externals(project, dry_run=False)
+
+            self.assertEqual(self._git(checkout, "rev-parse", "HEAD"), older)
+            self.assertEqual(self._git(checkout, "branch", "--show-current"), branch)

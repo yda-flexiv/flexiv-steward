@@ -22,7 +22,13 @@ def is_git_cache(path: Path) -> bool:
 
 
 def has_commit(path: Path, commit: str) -> bool:
-    if not is_git_cache(path):
+    """Return whether *path* contains *commit*.
+
+    Both bare cache repositories and ordinary external checkouts use this
+    helper.  Checking for a bare repository first incorrectly reports every
+    working checkout as missing because its ``HEAD`` lives under ``.git``.
+    """
+    if not path.is_dir():
         return False
     result = run_process(["git", "cat-file", "-e", f"{commit}^{{commit}}"], path)
     return result.returncode == 0
