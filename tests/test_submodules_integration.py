@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from flexiv_steward.errors import ProjectError
+from flexiv_steward.gitcache import cache_path, ensure_cache
 from flexiv_steward.submodules import initialize_submodules
 
 
@@ -69,6 +71,54 @@ class SubmoduleIntegrationTests(unittest.TestCase):
                 self._output(second_worktree / "deps" / "module-two", "rev-parse", "HEAD"),
                 newer,
             )
+
+    def test_existing_submodule_fetches_new_pin_from_cache_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            module = root / "module-source"
+            remote = root / "module.git"
+            superproject = root / "super"
+            self._init(module)
+            (module / "payload.txt").write_text("old pin\n")
+            self._git(module, "add", "payload.txt")
+            self._git(module, "commit", "-m", "old")
+            old = self._output(module, "rev-parse", "HEAD")
+            self._git(root, "clone", "--bare", str(module), str(remote))
+            self._init(superproject)
+            self._git(superproject, "-c", "protocol.file.allow=always",
+                      "submodule", "add", str(remote), "module")
+            self._git(superproject, "commit", "-am", "pin old")
+            self.assertEqual(initialize_submodules(superproject, dry_run=False), 0)
+            checkout = superproject / "module"
+
+            (module / "payload.txt").write_text("new pin\n")
+            self._git(module, "commit", "-am", "new")
+            required = self._output(module, "rev-parse", "HEAD")
+            self._git(module, "push", str(remote), "HEAD:refs/heads/new-pin")
+            self._git(superproject, "update-index", "--cacheinfo", "160000", required, "module")
+            self._git(superproject, "commit", "-m", "pin new")
+            caches = superproject / ".git" / "flexiv-steward" / "submodules-v2"
+            ensure_cache(cache_path(caches, str(remote)), str(remote), (required,))
+            self.assertNotEqual(
+                subprocess.run(["git", "cat-file", "-e", required], cwd=checkout,
+                               capture_output=True).returncode, 0,
+            )
+            remote.rename(root / "module-offline.git")
+
+            self.assertEqual(initialize_submodules(superproject, dry_run=False), 0)
+            self.assertEqual(self._output(checkout, "rev-parse", "HEAD"), required)
+            self.assertEqual((checkout / "payload.txt").read_text(), "new pin\n")
+            self.assertEqual(self._output(checkout, "remote", "get-url", "origin"), str(remote))
+            self.assertEqual(initialize_submodules(superproject, dry_run=False), 0)
+
+            # A pin change must still refuse to overwrite local edits and report Git's reason.
+            (checkout / "payload.txt").write_text("local edits\n")
+            self._git(superproject, "update-index", "--cacheinfo", "160000", old, "module")
+            self._git(superproject, "commit", "-m", "pin old again")
+            with self.assertRaisesRegex(ProjectError, "local changes"):
+                initialize_submodules(superproject, dry_run=False)
+            self.assertEqual((checkout / "payload.txt").read_text(), "local edits\n")
+            self.assertEqual(self._output(checkout, "rev-parse", "HEAD"), required)
 
     def _init(self, directory: Path) -> None:
         directory.mkdir()

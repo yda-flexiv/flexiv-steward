@@ -6,7 +6,7 @@ import shlex
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from flexiv_steward.gitcache import cache_path, ensure_cache
+from flexiv_steward.gitcache import cache_path, ensure_cache, has_commit
 from flexiv_steward.models import SubmoduleSpec
 from flexiv_steward.process import run_git, run_process
 
@@ -42,6 +42,17 @@ def _specs(parent: Path) -> tuple[SubmoduleSpec, ...]:
 
 
 def _checkout_from_cache(parent: Path, spec: SubmoduleSpec, cache: Path) -> None:
+    checkout = parent / spec.path
+    if (checkout / ".git").exists() and not has_commit(checkout, spec.commit):
+        # The URL override below only supplies objects when cloning a new
+        # submodule. Existing checkouts must import the new pin explicitly.
+        run_process(
+            ["git", "-c", "protocol.file.allow=always", "fetch", "--depth=1",
+             "--no-tags", str(cache), spec.commit],
+            checkout,
+            timeout=300,
+            check=True,
+        )
     command = [
         "git",
         "-c",
@@ -55,8 +66,9 @@ def _checkout_from_cache(parent: Path, spec: SubmoduleSpec, cache: Path) -> None
         "--",
         str(spec.path),
     ]
-    run_process(command, parent, timeout=300, capture_output=False, check=True)
-    checkout = parent / spec.path
+    result = run_process(command, parent, timeout=300, check=True)
+    if result.output:
+        print(result.output)
     run_process(["git", "remote", "set-url", "origin", spec.url], checkout, check=True)
 
 
