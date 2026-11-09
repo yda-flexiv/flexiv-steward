@@ -20,6 +20,8 @@ fs gc builds
 fs build ubuntu-relwithdebinfo-g1 --configure
 fs build ubuntu-static-check --configure --target FlexivSwClangTidyCheck
 fs test workflow --dry-run
+fs run uiapp
+fs run rca --dry-run
 fs session handoff --days 3
 #+end_src
 
@@ -187,3 +189,67 @@ takes a build preset. With ~--configure~, ~fs build~ first configures the
 including names from ~CMakeUserPresets.json~. Use ~--json~ for machine-readable
 output. Preset names come from the selected worktree; there is no separate
 ~all~/~rca~/~ui~ profile mapping.
+
+* Running RCA and UIApp
+
+~fs run rca~ and ~fs run uiapp~ use the checkout's ~run_rca_for_ubuntu.sh~ and
+~run_ui_for_ubuntu.sh~ to launch existing Linux binaries on the host,
+from the build directory so relative ~specs/~ and ~user_data/~ paths work.
+The default build directory is ~build/Linux/RelWithDebInfo~ under the detected
+source tree (including the wrapper's ~flexiv/~ directory). Select another build
+with ~--preset <configure-preset>~ or ~--build-dir <path>~; relative build paths
+are relative to the source tree. ~--dry-run~ resolves and prints the full launch
+without starting the app. Building and configuring remain explicit operations.
+
+#+begin_src sh
+fs run uiapp --preset ubuntu-relwithdebinfo-g1-All
+fs run uiapp --build-dir build/Linux/Release -- -p ubuntu_pc
+fs run rca
+fs run rca AX01H-06-D1-Yangda
+fs run rca AX01H-06-D1-Yangda --dry-run
+fs run rca AX01H-06-D1-Yangda -- -c /path/to/custom/flexivCfg.xml
+fs run rca -- -G
+#+end_src
+
+Pass launch-script arguments after ~--~. The RCA script supplies its normal
+configuration, serial number, user data, motion bar, control box, user type and
+simulator defaults. A positional serial number sets ~-s~ and infers ~-c~ from
+the model before the first dash: ~AX01H-06-D1-Yangda~ selects the selected
+build's ~specs/robots/FlexivAX01H/flexivCfg.xml~. The serial's case is preserved;
+the model lookup uses uppercase. Missing inferred configs fail before launch
+with an explicit ~-c~ override hint. You can still pass ~-s~ and ~-c~ after ~--~.
+~-G~ starts the script's debugger mode. UIApp's script supplies
+the UI/RCA specs and user-data paths, platform and Qt WebEngine settings.
+Steward sets ~flexiv_sw_path~ and ~flexiv_sw_build_path~ to the selected build
+directory and resolves ~flexiv_thirdparty2_path~ automatically. This also fixes
+the RCA script's default ~specs/~ and ~user_data/~ paths in wrapper checkouts.
+If a checkout has no launch script, Steward falls back to invoking the binary;
+RCA then needs its full application arguments, and UIApp defaults to ~-p ubuntu_pc~.
+
+RCA serves Modbus TCP on the privileged port 502, so Steward launches it through
+~authbind --deep~. ~--deep~ keeps authbind's bind shim across
+~run_rca_for_ubuntu.sh~ and every child process it starts. Authorizing that one
+port for the current user is a one-time host setup:
+
+#+begin_src sh
+sudo apt install authbind
+sudo touch /etc/authbind/byport/502
+sudo chown "$USER" /etc/authbind/byport/502
+sudo chmod 755 /etc/authbind/byport/502
+#+end_src
+
+Port 502 is below 512, so authbind expects a plain ~502~ permission file (no
+~!~ prefix). Without one, RCA starts but cannot bind the port. ~fs run rca
+--no-authbind~ launches directly, for example when running as root or when the
+binary already has ~CAP_NET_BIND_SERVICE~. UIApp is never wrapped. ~--dry-run~
+still prints the full ~authbind --deep~ command without needing authbind
+installed.
+
+Steward uses ~EXTERNAL_ThirdParty2_DIR~ from the selected build's ~CMakeCache.txt~
+when it names a host path. For Docker's canonical ~/opt/flexiv_thirdparty2~,
+it sources this checkout's ~docker/docker_config.sh~ (including ~local.env~)
+to obtain ~FLEXIV_THIRDPARTY2_SHARED_PATH~. It sets the matching Qt library and
+plugin paths, MuJoCo library path and thirdparty ~lib/~ path, preserving existing
+~LD_LIBRARY_PATH~ entries and the host environment (including display settings).
+It does not start Docker or create volumes. Missing runtime files report an
+error with a setup hint; Steward never picks an unrelated installed volume.

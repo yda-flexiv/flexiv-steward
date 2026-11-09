@@ -27,6 +27,7 @@ from flexiv_steward.gc import clean_builds, gc_worktrees
 from flexiv_steward.process import run_git
 from flexiv_steward.presets import build_preset, configure_preset, list_presets
 from flexiv_steward.serialization import to_jsonable
+from flexiv_steward.run import plan_run, run_application
 from flexiv_steward.sessions import SOURCES, handoff
 from flexiv_steward.setup import setup_worktree
 from flexiv_steward.sync import sync_worktree
@@ -120,6 +121,13 @@ def _build_command(args: argparse.Namespace) -> int:
 def _test_workflow_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
     return run_command(workflow_test_command(project), project, args.dry_run)
+
+
+def _run_application_command(args: argparse.Namespace) -> int:
+    plan = plan_run(discover_project(args.project), args.application, args.app_args,
+                    preset=args.preset, build_dir=args.build_dir, serial=args.serial,
+                    authbind=not args.no_authbind)
+    return run_application(plan, args.dry_run)
 
 
 def _session_handoff_command(args: argparse.Namespace) -> int:
@@ -293,6 +301,20 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--skip-deps-check", action="store_true", help="do not block the build on dependency revision drift")
     build.add_argument("--dry-run", action="store_true", help="print commands without executing them")
     build.set_defaults(handler=_build_command)
+    run = subcommands.add_parser("run", help="launch RCA or UIApp on the host with matching thirdparty libraries")
+    run.add_argument("application", type=str.lower, choices=("rca", "uiapp"))
+    run.add_argument("serial", nargs="?", help="RCA serial number; infer specs/robots/Flexiv<model>/flexivCfg.xml")
+    location = run.add_mutually_exclusive_group()
+    run_preset = location.add_argument("--preset", help="CMake configure preset selecting the build directory")
+    setattr(run_preset, "completer", _complete_presets)
+    location.add_argument("--build-dir", help="build directory (relative to source root, or absolute)")
+    run.add_argument("--no-authbind", action="store_true",
+                     help="launch RCA directly; binding privileged port 502 then needs root")
+    run.add_argument("--dry-run", action="store_true", help="resolve and print the launch without starting the app")
+    run.epilog = ("Example: fs run rca AX01H-06-D1-Yangda. Pass script arguments after --. "
+                  "RCA is launched through `authbind --deep` so it can bind port 502. "
+                  "Default build: build/Linux/RelWithDebInfo.")
+    run.set_defaults(handler=_run_application_command, app_args=[])
     setup = subcommands.add_parser("setup", help="bootstrap a new worktree and verify dependency revisions")
     setup_name = setup.add_argument("preset", help="CMake configure preset name")
     setattr(setup_name, "completer", _complete_presets)
@@ -346,7 +368,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     argcomplete.autocomplete(parser)
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    # Separate application options from Steward's, allowing fs flags both
+    # before and after the application name. Leave other commands unchanged.
+    args, extra = parser.parse_known_args(arguments)
+    if args.command == "run" and "--" in arguments:
+        separator = arguments.index("--")
+        args = parser.parse_args(arguments[:separator])
+        args.app_args = arguments[separator + 1:]
+    elif extra:
+        args = parser.parse_args(arguments)
     try:
         exit_code = args.handler(args)
     except ProjectError as error:
