@@ -251,3 +251,127 @@ class RunTests(unittest.TestCase):
         self.binary("app/UIApp/UIApp")
         with self.assertRaisesRegex(ProjectError, "expected one UIApp executable"):
             plan_run(self.project, "uiapp", [])
+
+    def _run_cli(self, *arguments):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr), \
+                patch("flexiv_steward.run.run_process") as run:
+            with self.assertRaises(SystemExit) as result:
+                main(["--project", str(self.project), "run", *arguments])
+        run.assert_not_called()
+        return result.exception.code, stdout.getvalue(), stderr.getvalue()
+
+    def _write_configure_presets(self, configure):
+        (self.source / "CMakePresets.json").write_text(json.dumps({"configurePresets": configure}))
+
+    def _second_build(self, relative="build/Linux/Ubuntu"):
+        """Create a complete Ubuntu build tree next to the default one."""
+        directory = self.source / relative
+        for application in ("app/RobotControlApp/RobotControlApp",
+                            "external/flexiv_sw_uiapp/app/UIApp/UIApp"):
+            binary = directory / application
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+        (directory / "CMakeCache.txt").write_text(
+            f"EXTERNAL_ThirdParty2_DIR:PATH={self.thirdparty}\n")
+        return directory.resolve()
+
+    def _remember_preset(self, configure_preset, preset=None):
+        path = self.project / ".steward" / "preset.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "version": 1,
+            "configure_preset": configure_preset,
+            "preset": preset,
+            "recorded_at": "2026-02-02T00:00:00+00:00",
+        }))
+        return path
+
+    def test_remembered_ubuntu_preset_selects_the_build_directory(self):
+        second = self._second_build()
+        self._write_configure_presets([
+            {"name": "ubuntu-remembered", "binaryDir": "${sourceDir}/build/Linux/Ubuntu"},
+        ])
+        self._remember_preset("ubuntu-remembered")
+
+        code, stdout, stderr = self._run_cli("rca", "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(second), stdout)
+        self.assertNotIn("RelWithDebInfo", stdout)
+        self.assertEqual(
+            stderr,
+            "Using remembered configure preset 'ubuntu-remembered' "
+            "for the build directory.\n",
+        )
+
+    def test_remembered_preset_applies_to_uiapp_too(self):
+        second = self._second_build()
+        self._write_configure_presets([
+            {"name": "ubuntu-remembered", "binaryDir": "${sourceDir}/build/Linux/Ubuntu"},
+        ])
+        self._remember_preset("ubuntu-remembered")
+
+        code, stdout, stderr = self._run_cli("uiapp", "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(second), stdout)
+        self.assertIn("Using remembered configure preset 'ubuntu-remembered'", stderr)
+
+    def test_explicit_preset_and_build_directory_override_the_remembered_preset(self):
+        self._second_build()
+        self._write_configure_presets([
+            {"name": "ubuntu-remembered", "binaryDir": "${sourceDir}/build/Linux/Ubuntu"},
+            {"name": "ubuntu-explicit", "binaryDir": "${sourceDir}/build/Linux/RelWithDebInfo"},
+        ])
+        self._remember_preset("ubuntu-remembered")
+
+        code, stdout, stderr = self._run_cli("rca", "--preset", "ubuntu-explicit", "--dry-run")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(str(self.build), stdout)
+        self.assertNotIn("Ubuntu", stdout)
+
+        code, stdout, stderr = self._run_cli(
+            "rca", "--build-dir", "build/Linux/RelWithDebInfo", "--dry-run")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(str(self.build), stdout)
+        self.assertNotIn("Ubuntu", stdout)
+
+    def test_remembered_yocto_preset_falls_back_to_the_default_build_directory(self):
+        self._write_configure_presets([
+            {"name": "yocto-remembered", "binaryDir": "${sourceDir}/build/Yocto/Release"},
+        ])
+        self._remember_preset("yocto-remembered")
+
+        code, stdout, stderr = self._run_cli("rca", "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(self.build), stdout)
+        self.assertEqual(
+            stderr,
+            "remembered preset 'yocto-remembered' is not an Ubuntu build; "
+            "using the default build directory\n",
+        )
+
+    def test_stale_remembered_preset_falls_back_to_the_default_build_directory(self):
+        self._write_configure_presets([
+            {"name": "ubuntu-remembered", "binaryDir": "${sourceDir}/build/Linux/Ubuntu"},
+        ])
+        self._remember_preset("deleted-preset")
+
+        code, stdout, stderr = self._run_cli("rca", "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertIn(str(self.build), stdout)
+        self.assertEqual(stderr, "ignoring stale remembered preset 'deleted-preset'\n")
+
+    def test_without_a_remembered_preset_nothing_is_announced(self):
+        self._write_configure_presets([
+            {"name": "ubuntu-remembered", "binaryDir": "${sourceDir}/build/Linux/Ubuntu"},
+        ])
+
+        code, stdout, stderr = self._run_cli("rca", "--dry-run")
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(str(self.build), stdout)

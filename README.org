@@ -14,9 +14,14 @@ fs wt rm task-SW-123-fix-thing
 fs wt sync RemoveSync2 --dry-run
 fs deps doctor --strict
 fs preset list
+fs preset current
+fs preset use ubuntu-relwithdebinfo-g1
+fs preset clear
+fs setup
 fs setup ubuntu-relwithdebinfo-g1 --dry-run
 fs gc builds --dry-run
 fs gc builds
+fs build --target RobotControlApp
 fs build ubuntu-relwithdebinfo-g1 --configure
 fs build ubuntu-static-check --configure --target FlexivSwClangTidyCheck
 fs test workflow --dry-run
@@ -65,7 +70,9 @@ usage errors. Notes go to stderr.
 - The destination folder is taken: refuses and names the occupant.
 
 This makes ~fs wt add~ safe to rerun. Run ~fs --project <path> preset list~ to choose a configure preset, then
-~fs --project <path> setup <preset>~ to initialize submodules and configure.
+~fs --project <path> setup~ to initialize submodules and configure the
+remembered or most-used preset, or name one with
+~fs --project <path> setup <preset>~.
 
 ~fs wt rm <worktree>~ asks for confirmation, deletes the worktree directory
 including submodule checkouts, then runs ~git worktree prune~. Locked worktrees
@@ -85,9 +92,19 @@ version check by default; ~--skip-deps-check~ is an explicit escape hatch. Add
 ~--verbose~ to list every clean dependency revision.
 
 For a newly created worktree, use ~fs preset list~ to inspect the checkout's
-CMake presets, then ~fs setup <configure-preset>~. It
-initializes recursive submodules, runs CMake configure so declared externals
-are checked out, and then verifies all dependency revisions.
+CMake presets, then ~fs setup~. It initializes recursive submodules, runs CMake
+configure so declared externals are checked out, and then verifies all
+dependency revisions.
+
+~fs setup~ takes an optional configure preset. An explicit
+~fs setup <configure-preset>~ wins. Without one, Steward reuses the worktree's
+remembered preset from ~<worktree>/.steward/preset.json~, otherwise the most
+frequently used configure preset in ~<workspace>/.steward/preset_history.json~.
+The workspace is the bare hub or the primary worktree, so ~fs setup~ run in
+~$HOME/ws/flexiv_sw/xxx~ reads
+~$HOME/ws/flexiv_sw/.steward/preset_history.json~. Stale history entries are
+skipped with a note on stderr. A successful setup records the chosen preset in
+the worktree and counts the use for later runs.
 
 Submodule objects are cached below the superproject's common Git directory at
 ~flexiv-steward/submodules-v2~. Caches are keyed by remote URL, contain only
@@ -183,27 +200,64 @@ build-directory results.
 Both configure and build run through ~docker/docker_dispatch.sh exec <platform>
 bash -c~, from the CMake source directory. Steward detects both the ~flexiv_sw~
 wrapper layout (source under ~flexiv/~) and a direct ~flexiv_sw_base~ worktree
-(source at the repository root). ~fs setup~ takes a configure preset; ~fs build~
-takes a build preset. With ~--configure~, ~fs build~ first configures the
+(source at the repository root). ~fs setup~ and ~fs build~ both take an optional
+preset. With ~--configure~, ~fs build~ first configures the
 ~configurePreset~ named by that build preset. ~fs preset list~ shows both groups,
 including names from ~CMakeUserPresets.json~. Use ~--json~ for machine-readable
 output. Preset names come from the selected worktree; there is no separate
 ~all~/~rca~/~ui~ profile mapping.
+
+An explicit ~fs build <build-preset>~ also records that preset and counts its
+configure preset, so later runs need no argument. Plain
+~fs build --target RobotControlApp~ reuses the remembered build preset, or the
+build preset whose ~configurePreset~ matches the remembered configure preset,
+and prints the source of that decision on stderr. Build never falls back to the
+workspace history: the build preset must correspond to what ~fs setup~
+configured, and with nothing remembered it fails with a hint (exit 2).
+
+Both files are local state under ~.steward/~ and are never committed. The
+history stores per-preset use counts and last-used times, but it is only a
+convenience: a missing or corrupt file is ignored. Steward appends ~.steward/~
+to the repository's local ~.git/info/exclude~, so no worktree looks dirty and
+~fs wt sync~ and ~fs gc worktrees~ still work. ~--dry-run~ records nothing.
+~fs preset current~ and ~fs preset history~ show the recorded state, and
+~--json~ emits either for tools.
+
+~fs preset use <configure-or-build-preset>~ remembers a preset for this worktree
+without running setup. It accepts either preset kind, writes
+~<worktree>/.steward/preset.json~, and counts the configure preset in the
+workspace history, so it can influence the next ~fs setup~ default. It reports
+the recorded configure preset and, when a different build preset applies, the
+build preset ~fs build~ will use. Unknown or hidden names fail with exit 2 and a
+~fs preset list~ hint. Tab completion offers configure and build names
+together, with the recorded and history-preferred ones first.
+~fs preset clear~ removes the remembered file, and its directory when empty. It
+only forgets this worktree's local state; the workspace history is untouched,
+and it exits 0 whether or not a preset was recorded.
 
 * Running RCA and UIApp
 
 ~fs run rca~ and ~fs run uiapp~ use the checkout's ~run_rca_for_ubuntu.sh~ and
 ~run_ui_for_ubuntu.sh~ to launch existing Linux binaries on the host,
 from the build directory so relative ~specs/~ and ~user_data/~ paths work.
-The default build directory is ~build/Linux/RelWithDebInfo~ under the detected
-source tree (including the wrapper's ~flexiv/~ directory). Select another build
-with ~--preset <configure-preset>~ or ~--build-dir <path>~; relative build paths
-are relative to the source tree. ~--dry-run~ resolves and prints the full launch
-without starting the app. Building and configuring remain explicit operations.
+The build directory comes from, in order, an explicit
+~--preset <configure-preset>~, an explicit ~--build-dir <path>~, the worktree's
+remembered configure preset from ~<worktree>/.steward/preset.json~, then the
+built-in default ~build/Linux/RelWithDebInfo~ under the detected source tree
+(including the wrapper's ~flexiv/~ directory). Relative build paths are
+relative to the source tree. Using the remembered preset is noted on stderr:
+~Using remembered configure preset '<name>' for the build directory.~ A stale
+remembered preset is skipped with
+~ignoring stale remembered preset '<name>'~, as is a non-Ubuntu (yocto) one:
+~remembered preset '<name>' is not an Ubuntu build; using the default build directory~.
+Both fall back to the built-in default. ~--dry-run~ resolves and prints the
+full launch without starting the app and records nothing. Building and
+configuring remain explicit operations.
 
 #+begin_src sh
 fs run uiapp --preset ubuntu-relwithdebinfo-g1-All
 fs run uiapp --build-dir build/Linux/Release -- -p ubuntu_pc
+fs run uiapp
 fs run rca
 fs run rca AX01H-06-D1-Yangda
 fs run rca AX01H-06-D1-Yangda --dry-run

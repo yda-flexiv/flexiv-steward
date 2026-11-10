@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import argcomplete
 
@@ -24,8 +25,27 @@ from flexiv_steward.formatters import (
     format_worktree_list,
 )
 from flexiv_steward.gc import clean_builds, gc_worktrees
+from flexiv_steward.preset_store import (
+    clear_current,
+    current_path,
+    history_path,
+    load_current,
+    load_history,
+    record_usage,
+    store_current,
+    workspace_of,
+)
+from flexiv_steward.presets import (
+    Preset,
+    PresetChoice,
+    list_presets,
+    matching_build_preset,
+    remember_preset,
+    remembered_configure_preset,
+    resolve_build_preset,
+    resolve_configure_preset,
+)
 from flexiv_steward.process import run_git
-from flexiv_steward.presets import build_preset, configure_preset, list_presets
 from flexiv_steward.serialization import to_jsonable
 from flexiv_steward.run import plan_run, run_application
 from flexiv_steward.sessions import SOURCES, handoff
@@ -101,9 +121,36 @@ def _worktree_switch_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _announce_preset_choice(choice: PresetChoice, project: Path, kind: str) -> None:
+    """Explain a non-explicit preset choice on stderr, keeping stdout scriptable."""
+    for note in choice.notes:
+        print(note, file=sys.stderr)
+    if choice.origin == "argument":
+        return
+    if choice.origin == "worktree":
+        print(
+            f"Using remembered {kind} preset '{choice.preset.name}' "
+            f"(from {current_path(project)}).",
+            file=sys.stderr,
+        )
+        return
+    print(
+        f"Using most used configure preset '{choice.preset.name}' "
+        f"from {history_path(workspace_of(project))}.",
+        file=sys.stderr,
+    )
+
+
+def _remember_build_preset(project: Path, preset: Preset) -> None:
+    """Record one successful build so later commands can omit the preset."""
+    record_usage(workspace_of(project), preset.configure_name)
+    store_current(project, configure_preset=preset.configure_name, preset=preset.name)
+
+
 def _build_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
-    preset = build_preset(project, args.preset)
+    choice = resolve_build_preset(project, args.preset)
+    _announce_preset_choice(choice, project, "build")
     if not args.skip_deps_check:
         statuses = dependency_doctor(project)
         if has_blocking_errors(statuses):
@@ -111,11 +158,13 @@ def _build_command(args: argparse.Namespace) -> int:
             return 1
         if has_dependency_errors(statuses):
             print(format_dependency_doctor(statuses), file=sys.stderr)
+    if not args.dry_run:
+        _remember_build_preset(project, choice.preset)
     if args.configure:
-        result = run_command(configure_command(project, preset), project, args.dry_run)
+        result = run_command(configure_command(project, choice.preset), project, args.dry_run)
         if result:
             return result
-    return run_command(build_command(project, preset, args.target), project, args.dry_run)
+    return run_command(build_command(project, choice.preset, args.target), project, args.dry_run)
 
 
 def _test_workflow_command(args: argparse.Namespace) -> int:
@@ -124,8 +173,20 @@ def _test_workflow_command(args: argparse.Namespace) -> int:
 
 
 def _run_application_command(args: argparse.Namespace) -> int:
-    plan = plan_run(discover_project(args.project), args.application, args.app_args,
-                    preset=args.preset, build_dir=args.build_dir, serial=args.serial,
+    project = discover_project(args.project)
+    preset = args.preset
+    if preset is None and args.build_dir is None:
+        remembered, notes = remembered_configure_preset(project)
+        for note in notes:
+            print(note, file=sys.stderr)
+        if remembered is not None:
+            preset = remembered.name
+            print(
+                f"Using remembered configure preset '{preset}' for the build directory.",
+                file=sys.stderr,
+            )
+    plan = plan_run(project, args.application, args.app_args,
+                    preset=preset, build_dir=args.build_dir, serial=args.serial,
                     authbind=not args.no_authbind)
     return run_application(plan, args.dry_run)
 
@@ -157,8 +218,18 @@ def _dependency_doctor_command(args: argparse.Namespace) -> int:
 
 def _setup_command(args: argparse.Namespace) -> int:
     project = discover_project(args.project)
-    preset = configure_preset(project, args.preset)
-    return setup_worktree(project, preset, args.dry_run)
+    choice = resolve_configure_preset(project, args.preset)
+    _announce_preset_choice(choice, project, "configure")
+    code = setup_worktree(project, choice.preset, args.dry_run)
+    if code == 0 and not args.dry_run:
+        record_usage(workspace_of(project), choice.preset.name)
+        store_current(
+            project,
+            configure_preset=choice.preset.name,
+            preset=matching_build_preset(project, choice.preset.name),
+        )
+        print(f"Remembered preset '{choice.preset.name}' in {current_path(project)}.")
+    return code
 
 
 def _preset_list_command(args: argparse.Namespace) -> int:
@@ -173,15 +244,130 @@ def _preset_list_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _preset_current_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    path = current_path(project)
+    remembered = load_current(project)
+    if args.json:
+        if remembered is None:
+            print("null")
+        else:
+            print(json.dumps(
+                {
+                    "path": str(path),
+                    "configure_preset": remembered.configure_preset,
+                    "preset": remembered.preset,
+                    "recorded_at": remembered.recorded_at,
+                },
+                indent=2,
+                sort_keys=True,
+            ))
+        return 0
+    if remembered is None:
+        print(
+            f"No preset recorded for {project}; "
+            "run `fs preset use <preset>` or `fs setup <preset>`."
+        )
+        return 0
+    print(f"Preset file: {path}")
+    print(f"Configure preset: {remembered.configure_preset}")
+    print(f"Build preset: {remembered.preset or 'none'}")
+    print(f"Recorded at: {remembered.recorded_at or 'unknown'}")
+    return 0
+
+
+def _preset_history_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    workspace = workspace_of(project)
+    path = history_path(workspace)
+    usages = load_history(workspace)
+    if args.json:
+        print(json.dumps(
+            [
+                {"name": usage.name, "uses": usage.uses, "last_used": usage.last_used}
+                for usage in usages
+            ],
+            indent=2,
+        ))
+        return 0
+    if not usages:
+        print(f"No preset history in {path}.")
+        return 0
+    print(f"Preset history: {path}")
+    width = max(len("NAME"), *(len(usage.name) for usage in usages))
+    print(f"{'NAME':<{width}}  USES  LAST USED")
+    for usage in usages:
+        print(f"{usage.name:<{width}}  {usage.uses:<4}  {usage.last_used or 'unknown'}")
+    return 0
+
+
+def _preset_use_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    configure, build = remember_preset(project, args.preset)
+    store_current(project, configure_preset=configure.name, preset=build)
+    record_usage(workspace_of(project), configure.name)
+    print(f"Remembered preset '{configure.name}' in {current_path(project)}.")
+    if build is not None and build != configure.name:
+        print(f"`fs build` will use build preset '{build}'.")
+    return 0
+
+
+def _preset_clear_command(args: argparse.Namespace) -> int:
+    project = discover_project(args.project)
+    if clear_current(project):
+        print(f"Cleared the remembered preset for {project}.")
+    else:
+        print(f"No preset recorded for {project}; nothing to clear.")
+    return 0
+
+
+def _preferred_preset_names(project: Path, kind: str) -> list[str]:
+    """Return remembered, then workspace-history, preset names for completion."""
+    names: list[str] = []
+    remembered = load_current(project)
+    if remembered is not None:
+        if kind != "build":
+            names.append(remembered.configure_preset)
+        if kind != "configure":
+            if remembered.preset:
+                names.append(remembered.preset)
+            try:
+                mapped = matching_build_preset(project, remembered.configure_preset)
+            except ProjectError:
+                mapped = None
+            if mapped is not None:
+                names.append(mapped)
+    try:
+        names.extend(usage.name for usage in load_history(workspace_of(project)))
+    except (ProjectError, OSError):
+        pass
+    return names
+
+
 def _complete_presets(
     prefix: str = "", parsed_args: argparse.Namespace | None = None, **_: object
 ) -> list[str]:
     try:
         project = discover_project(parsed_args.project if parsed_args else None)
-        kind = "build" if parsed_args and parsed_args.command == "build" else "configure"
-        return [name for name in list_presets(project)[kind] if name.startswith(prefix)]
+        tables = list_presets(project)
+        preset_command = getattr(parsed_args, "preset_command", None) if parsed_args else None
+        if parsed_args is not None and parsed_args.command == "preset" and preset_command == "use":
+            # `fs preset use` accepts either kind, so suggest the union.
+            kind = "use"
+            available = list(dict.fromkeys([*tables["configure"], *tables["build"]]))
+        elif parsed_args is not None and parsed_args.command == "build":
+            kind = "build"
+            available = tables["build"]
+        else:
+            kind = "configure"
+            available = tables["configure"]
     except (ProjectError, OSError):
         return []
+    ordered = list(dict.fromkeys(
+        name for name in _preferred_preset_names(project, kind) if name in available
+    ))
+    ordered.extend(sorted(name for name in available if name not in ordered))
+    return [name for name in ordered if name.startswith(prefix)]
 
 
 def _gc_builds_command(args: argparse.Namespace) -> int:
@@ -288,13 +474,38 @@ def build_parser() -> argparse.ArgumentParser:
     dependency_doctor_parser.add_argument("--verbose", action="store_true", help="show every checked dependency revision")
     dependency_doctor_parser.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     dependency_doctor_parser.set_defaults(handler=_dependency_doctor_command)
-    preset = subcommands.add_parser("preset", help="inspect CMake presets in the current worktree")
+    preset = subcommands.add_parser("preset", help="inspect CMake presets and the remembered preset")
     preset_commands = preset.add_subparsers(dest="preset_command", required=True)
     preset_list = preset_commands.add_parser("list", help="list available configure and build presets")
     preset_list.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
     preset_list.set_defaults(handler=_preset_list_command)
+    preset_current = preset_commands.add_parser(
+        "current", help="show the preset this worktree remembers"
+    )
+    preset_current.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    preset_current.set_defaults(handler=_preset_current_command)
+    preset_history = preset_commands.add_parser(
+        "history", help="show workspace-wide preset usage, most used first"
+    )
+    preset_history.add_argument("--json", action="store_true", help="emit JSON for tools and agents")
+    preset_history.set_defaults(handler=_preset_history_command)
+    preset_use = preset_commands.add_parser(
+        "use", help="remember a preset for this worktree"
+    )
+    preset_use_name = preset_use.add_argument(
+        "preset", help="configure or build preset to remember"
+    )
+    setattr(preset_use_name, "completer", _complete_presets)
+    preset_use.set_defaults(handler=_preset_use_command)
+    preset_clear = preset_commands.add_parser(
+        "clear", help="forget this worktree's remembered preset"
+    )
+    preset_clear.set_defaults(handler=_preset_clear_command)
     build = subcommands.add_parser("build", help="build a CMake preset in Docker")
-    build_name = build.add_argument("preset", help="CMake build preset name")
+    build_name = build.add_argument(
+        "preset", nargs="?",
+        help="CMake build preset name (default: the preset this worktree remembers)",
+    )
     setattr(build_name, "completer", _complete_presets)
     build.add_argument("--configure", action="store_true", help="configure the preset before building")
     build.add_argument("--target", action="append", default=[], help="CMake target to build; may be repeated")
@@ -305,7 +516,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("application", type=str.lower, choices=("rca", "uiapp"))
     run.add_argument("serial", nargs="?", help="RCA serial number; infer specs/robots/Flexiv<model>/flexivCfg.xml")
     location = run.add_mutually_exclusive_group()
-    run_preset = location.add_argument("--preset", help="CMake configure preset selecting the build directory")
+    run_preset = location.add_argument(
+        "--preset",
+        help="CMake configure preset selecting the build directory "
+             "(default: the preset this worktree remembers, else build/Linux/RelWithDebInfo)",
+    )
     setattr(run_preset, "completer", _complete_presets)
     location.add_argument("--build-dir", help="build directory (relative to source root, or absolute)")
     run.add_argument("--no-authbind", action="store_true",
@@ -313,10 +528,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="resolve and print the launch without starting the app")
     run.epilog = ("Example: fs run rca AX01H-06-D1-Yangda. Pass script arguments after --. "
                   "RCA is launched through `authbind --deep` so it can bind port 502. "
-                  "Default build: build/Linux/RelWithDebInfo.")
+                  "Build directory: --preset, --build-dir, the remembered preset, "
+                  "else build/Linux/RelWithDebInfo.")
     run.set_defaults(handler=_run_application_command, app_args=[])
     setup = subcommands.add_parser("setup", help="bootstrap a new worktree and verify dependency revisions")
-    setup_name = setup.add_argument("preset", help="CMake configure preset name")
+    setup_name = setup.add_argument(
+        "preset", nargs="?",
+        help="CMake configure preset name (default: the remembered or most used preset)",
+    )
     setattr(setup_name, "completer", _complete_presets)
     setup.add_argument("--dry-run", action="store_true", help="print setup commands without executing them")
     setup.set_defaults(handler=_setup_command)

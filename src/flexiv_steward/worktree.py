@@ -228,7 +228,7 @@ def collect_worktree_summaries(project: Path) -> tuple[WorktreeSummary, ...]:
     return tuple(summaries)
 
 
-def _workspace_root(project: Path) -> Path:
+def workspace_root(project: Path) -> Path:
     """Return the bare hub directory or primary worktree that owns *project*."""
     common = Path(run_git(project, "rev-parse", "--git-common-dir"))
     if not common.is_absolute():
@@ -250,7 +250,7 @@ def add_worktree(project: Path, branch: str, parent: str) -> WorktreeCreation:
         if existing.locked:
             raise ProjectError(f"worktree {existing.path} is locked; run `fs wt rm {branch}` first")
         return WorktreeCreation("exists", existing.path)
-    destination = _workspace_root(project) / branch.replace("/", "-")
+    destination = workspace_root(project) / branch.replace("/", "-")
     if destination.exists():
         occupant = next(
             (item for item in worktrees if item.path.resolve() == destination.resolve()), None
@@ -304,7 +304,7 @@ def plan_worktree_removal(project: Path, identifier: str) -> Path:
     resolved = target.resolve()
     if resolved == project.resolve():
         raise ProjectError("refusing to remove the current worktree")
-    if resolved == _workspace_root(project).resolve():
+    if resolved == workspace_root(project).resolve():
         raise ProjectError("refusing to remove the main worktree")
     return target
 

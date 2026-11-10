@@ -10,7 +10,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from flexiv_steward.cli import _complete_branches, _complete_worktrees, main
+from flexiv_steward.cli import _complete_branches, _complete_presets, _complete_worktrees, main
+from flexiv_steward.preset_store import current_path, history_path
 
 
 class CliTests(unittest.TestCase):
@@ -89,6 +90,282 @@ class CliTests(unittest.TestCase):
         code, _, stderr = self._invoke("--project", str(self.project), "build", "rca", "--dry-run")
         self.assertEqual(code, 2)
         self.assertIn("fs preset list", stderr)
+
+    def _write_preset_fixtures(self) -> None:
+        (self.project / "flexiv").mkdir()
+        (self.project / "docker").mkdir()
+        (self.project / "docker" / "docker_dispatch.sh").touch()
+        (self.project / "flexiv" / "CMakePresets.json").write_text(json.dumps({
+            "configurePresets": [
+                {"name": "base", "hidden": True, "binaryDir": "${sourceDir}/build"},
+                {"name": "yocto-relwithdebinfo", "inherits": "base"},
+                {"name": "ubuntu-relwithdebinfo", "binaryDir": "${sourceDir}/build/ubuntu"},
+            ],
+            "buildPresets": [
+                {"name": "yocto-build", "configurePreset": "yocto-relwithdebinfo"},
+                {"name": "ubuntu-relwithdebinfo", "configurePreset": "ubuntu-relwithdebinfo"},
+            ],
+        }))
+
+    def _seed_history(self, records: dict[str, int]) -> Path:
+        path = history_path(self.project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "version": 1,
+            "presets": {
+                name: {"uses": uses, "last_used": "2026-01-01T00:00:00+00:00"}
+                for name, uses in records.items()
+            },
+        }))
+        return path
+
+    def _seed_current(self, configure_preset: str, preset: str | None = None) -> Path:
+        path = current_path(self.project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "version": 1,
+            "configure_preset": configure_preset,
+            "preset": preset,
+            "recorded_at": "2026-02-02T00:00:00+00:00",
+        }))
+        return path
+
+    def test_setup_without_preset_uses_history_and_dry_run_records_nothing(self) -> None:
+        self._write_preset_fixtures()
+        history = self._seed_history({"yocto-relwithdebinfo": 3})
+        before = history.read_bytes()
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "setup", "--dry-run")
+
+        self.assertEqual(code, 0)
+        self.assertIn("cmake --preset yocto-relwithdebinfo", stdout)
+        self.assertNotIn("Remembered", stdout)
+        self.assertIn(
+            "Using most used configure preset 'yocto-relwithdebinfo' "
+            f"from {history_path(self.project)}.",
+            stderr,
+        )
+        self.assertEqual(history.read_bytes(), before)
+        self.assertFalse(current_path(self.project).exists())
+
+    def test_build_without_preset_uses_the_remembered_preset(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_current("yocto-relwithdebinfo", "yocto-build")
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "build", "--target", "RobotControlApp", "--dry-run"
+        )
+
+        self.assertEqual(code, 0)
+        commands = [shlex.split(line.removeprefix("$ ")) for line in stdout.splitlines()]
+        self.assertEqual(commands[-1][-1], "cd flexiv && cmake --build --preset yocto-build "
+                                           "--target RobotControlApp")
+        self.assertIn(
+            f"Using remembered build preset 'yocto-build' (from {current_path(self.project)}).",
+            stderr,
+        )
+
+    def test_build_records_the_preset_without_dirtying_the_worktree(self) -> None:
+        self._write_preset_fixtures()
+        subprocess.run(["git", "add", "-A"], cwd=self.project, check=True)
+        subprocess.run(["git", "commit", "-qm", "presets"], cwd=self.project, check=True)
+
+        with (
+            patch("flexiv_steward.cli.run_command", return_value=0) as run_command,
+            patch("flexiv_steward.cli.dependency_doctor", return_value=[]),
+            patch("flexiv_steward.cli.has_blocking_errors", return_value=False),
+            patch("flexiv_steward.cli.has_dependency_errors", return_value=False),
+        ):
+            code, stdout, stderr = self._invoke(
+                "--project", str(self.project), "build", "yocto-build"
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("cmake --build --preset yocto-build", run_command.call_args.args[0][-1])
+        self.assertEqual(run_command.call_count, 1)
+        remembered = json.loads(current_path(self.project).read_text())
+        self.assertEqual(remembered["configure_preset"], "yocto-relwithdebinfo")
+        self.assertEqual(remembered["preset"], "yocto-build")
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["yocto-relwithdebinfo"]["uses"], 1)
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.project,
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(status, "")
+
+    def test_setup_and_build_without_any_preset_explain_how_to_choose(self) -> None:
+        self._write_preset_fixtures()
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "setup")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("fs preset list", stderr)
+        self.assertIn("fs setup <preset>", stderr)
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "build")
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("fs preset list", stderr)
+        self.assertIn("fs setup <preset>", stderr)
+
+    def test_setup_records_the_preset_and_its_matching_build_preset(self) -> None:
+        self._write_preset_fixtures()
+        subprocess.run(["git", "add", "-A"], cwd=self.project, check=True)
+        subprocess.run(["git", "commit", "-qm", "presets"], cwd=self.project, check=True)
+
+        with patch("flexiv_steward.cli.setup_worktree", return_value=0) as setup_worktree:
+            code, stdout, stderr = self._invoke(
+                "--project", str(self.project), "setup", "ubuntu-relwithdebinfo"
+            )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(setup_worktree.call_count, 1)
+        self.assertEqual(
+            stdout,
+            f"Remembered preset 'ubuntu-relwithdebinfo' in {current_path(self.project)}.\n",
+        )
+        remembered = json.loads(current_path(self.project).read_text())
+        self.assertEqual(remembered["configure_preset"], "ubuntu-relwithdebinfo")
+        self.assertEqual(remembered["preset"], "ubuntu-relwithdebinfo")
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["ubuntu-relwithdebinfo"]["uses"], 1)
+        status = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.project,
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertEqual(status, "")
+
+    def test_setup_without_preset_remembers_the_most_used_configure_preset(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_history({"yocto-relwithdebinfo": 2})
+
+        with patch("flexiv_steward.cli.setup_worktree", return_value=0):
+            code, stdout, stderr = self._invoke("--project", str(self.project), "setup")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Using most used configure preset 'yocto-relwithdebinfo'", stderr)
+        self.assertIn(f"Remembered preset 'yocto-relwithdebinfo' in {current_path(self.project)}.", stdout)
+        remembered = json.loads(current_path(self.project).read_text())
+        self.assertEqual(remembered["configure_preset"], "yocto-relwithdebinfo")
+        self.assertEqual(remembered["preset"], "yocto-build")
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["yocto-relwithdebinfo"]["uses"], 3)
+
+    def test_build_maps_a_remembered_configure_preset_and_prints_the_mapping(self) -> None:
+        self._write_preset_fixtures()
+        current = self._seed_current("yocto-relwithdebinfo")
+        before = current.read_bytes()
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "build", "--target", "RobotControlApp", "--dry-run"
+        )
+
+        self.assertEqual(code, 0)
+        commands = [shlex.split(line.removeprefix("$ ")) for line in stdout.splitlines()]
+        self.assertEqual(commands[-1][-1], "cd flexiv && cmake --build --preset yocto-build "
+                                           "--target RobotControlApp")
+        self.assertIn(
+            "build preset 'yocto-build' configures remembered preset 'yocto-relwithdebinfo'",
+            stderr,
+        )
+        self.assertIn(
+            f"Using remembered build preset 'yocto-build' (from {current_path(self.project)}).",
+            stderr,
+        )
+        self.assertEqual(current.read_bytes(), before)
+
+    def test_build_ignores_a_stale_remembered_build_preset(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_current("yocto-relwithdebinfo", "deleted-build")
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "build", "--target", "RobotControlApp", "--dry-run"
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("ignoring stale remembered build preset 'deleted-build'", stderr)
+        commands = [shlex.split(line.removeprefix("$ ")) for line in stdout.splitlines()]
+        self.assertEqual(commands[-1][-1], "cd flexiv && cmake --build --preset yocto-build "
+                                           "--target RobotControlApp")
+
+    def test_preset_current_reports_text_and_json_shapes(self) -> None:
+        self._write_preset_fixtures()
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "current", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIsNone(json.loads(stdout))
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "current")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(f"No preset recorded for {self.project}", stdout)
+        self.assertIn("fs setup <preset>", stdout)
+
+        self._seed_current("yocto-relwithdebinfo", "yocto-build")
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "current", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), {
+            "path": str(current_path(self.project)),
+            "configure_preset": "yocto-relwithdebinfo",
+            "preset": "yocto-build",
+            "recorded_at": "2026-02-02T00:00:00+00:00",
+        })
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "current")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(f"Preset file: {current_path(self.project)}", stdout)
+        self.assertIn("Configure preset: yocto-relwithdebinfo", stdout)
+        self.assertIn("Build preset: yocto-build", stdout)
+        self.assertIn("Recorded at: 2026-02-02T00:00:00+00:00", stdout)
+
+        self._seed_current("yocto-relwithdebinfo")
+        code, stdout, _ = self._invoke("--project", str(self.project), "preset", "current")
+        self.assertIn("Build preset: none", stdout)
+
+    def test_preset_history_reports_text_and_json_shapes(self) -> None:
+        self._write_preset_fixtures()
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "history", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), [])
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "history")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout, f"No preset history in {history_path(self.project)}.\n")
+
+        self._seed_history({"yocto-relwithdebinfo": 2, "ubuntu-relwithdebinfo": 5})
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "history", "--json")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), [
+            {"name": "ubuntu-relwithdebinfo", "uses": 5, "last_used": "2026-01-01T00:00:00+00:00"},
+            {"name": "yocto-relwithdebinfo", "uses": 2, "last_used": "2026-01-01T00:00:00+00:00"},
+        ])
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "history")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn(f"Preset history: {history_path(self.project)}", stdout)
+        self.assertLess(stdout.index("ubuntu-relwithdebinfo"), stdout.index("yocto-relwithdebinfo"))
+        self.assertIn("5", stdout)
+
+    def test_completers_order_suggestions_by_preset_preference(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_current("yocto-relwithdebinfo", "yocto-build")
+        self._seed_history({"ubuntu-relwithdebinfo": 3})
+
+        setup_args = argparse.Namespace(project=str(self.project), command="setup")
+        self.assertEqual(
+            _complete_presets(parsed_args=setup_args),
+            ["yocto-relwithdebinfo", "ubuntu-relwithdebinfo"],
+        )
+        self.assertEqual(
+            _complete_presets(prefix="ubuntu", parsed_args=setup_args), ["ubuntu-relwithdebinfo"]
+        )
+
+        build_args = argparse.Namespace(project=str(self.project), command="build")
+        self.assertEqual(
+            _complete_presets(parsed_args=build_args),
+            ["yocto-build", "ubuntu-relwithdebinfo"],
+        )
 
     def _add_worktree(self, name: str = "other") -> Path:
         path = self.project / name
@@ -421,3 +698,143 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual((code, stderr), (0, ""))
         self.assertEqual(stdout.strip(), str(other))
+
+    def _commit_preset_fixtures(self) -> None:
+        subprocess.run(["git", "add", "-A"], cwd=self.project, check=True)
+        subprocess.run(["git", "commit", "-qm", "presets"], cwd=self.project, check=True)
+
+    def _git_status(self) -> str:
+        return subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.project,
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+    def test_preset_use_remembers_a_configure_preset_and_its_build_preset(self) -> None:
+        self._write_preset_fixtures()
+        self._commit_preset_fixtures()
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "preset", "use", "yocto-relwithdebinfo"
+        )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout, (
+            f"Remembered preset 'yocto-relwithdebinfo' in {current_path(self.project)}.\n"
+            "`fs build` will use build preset 'yocto-build'.\n"
+        ))
+        remembered = json.loads(current_path(self.project).read_text())
+        self.assertEqual(remembered["configure_preset"], "yocto-relwithdebinfo")
+        self.assertEqual(remembered["preset"], "yocto-build")
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["yocto-relwithdebinfo"]["uses"], 1)
+        self.assertEqual(self._git_status(), "")
+
+    def test_preset_use_accepts_a_build_preset_name_and_stores_its_configure_preset(self) -> None:
+        self._write_preset_fixtures()
+        presets = json.loads((self.project / "flexiv" / "CMakePresets.json").read_text())
+        presets["buildPresets"].append(
+            {"name": "renamed-build", "configurePreset": "ubuntu-relwithdebinfo"})
+        (self.project / "flexiv" / "CMakePresets.json").write_text(json.dumps(presets))
+        self._commit_preset_fixtures()
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "preset", "use", "renamed-build"
+        )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout, (
+            f"Remembered preset 'ubuntu-relwithdebinfo' in {current_path(self.project)}.\n"
+            "`fs build` will use build preset 'renamed-build'.\n"
+        ))
+        remembered = json.loads(current_path(self.project).read_text())
+        self.assertEqual(remembered["configure_preset"], "ubuntu-relwithdebinfo")
+        self.assertEqual(remembered["preset"], "renamed-build")
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["ubuntu-relwithdebinfo"]["uses"], 1)
+        self.assertEqual(self._git_status(), "")
+
+    def test_preset_use_rejects_unknown_and_hidden_names(self) -> None:
+        self._write_preset_fixtures()
+        presets = json.loads((self.project / "flexiv" / "CMakePresets.json").read_text())
+        presets["buildPresets"].append(
+            {"name": "hidden-build", "hidden": True, "configurePreset": "ubuntu-relwithdebinfo"})
+        (self.project / "flexiv" / "CMakePresets.json").write_text(json.dumps(presets))
+
+        for name in ("not-a-preset", "base", "hidden-build"):
+            with self.subTest(name=name):
+                code, stdout, stderr = self._invoke(
+                    "--project", str(self.project), "preset", "use", name
+                )
+                self.assertEqual(code, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn("fs preset list", stderr)
+        self.assertFalse(current_path(self.project).exists())
+
+    def test_preset_clear_forgets_the_remembered_preset_and_is_idempotent(self) -> None:
+        self._write_preset_fixtures()
+        path = self._seed_current("yocto-relwithdebinfo", "yocto-build")
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "clear")
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(stdout, f"Cleared the remembered preset for {self.project}.\n")
+        self.assertFalse(path.exists())
+        self.assertFalse(path.parent.exists())
+
+        code, stdout, stderr = self._invoke("--project", str(self.project), "preset", "clear")
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(
+            stdout, f"No preset recorded for {self.project}; nothing to clear.\n"
+        )
+
+    def test_preset_use_completion_suggests_configure_and_build_presets(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_current("ubuntu-relwithdebinfo", "ubuntu-relwithdebinfo")
+        parsed = argparse.Namespace(command="preset", preset_command="use", project=str(self.project))
+
+        completions = _complete_presets(prefix="", parsed_args=parsed)
+
+        self.assertEqual(completions[0], "ubuntu-relwithdebinfo")
+        self.assertEqual(
+            set(completions),
+            {"ubuntu-relwithdebinfo", "yocto-relwithdebinfo", "yocto-build"},
+        )
+        self.assertEqual(
+            set(_complete_presets(prefix="yocto", parsed_args=parsed)),
+            {"yocto-build", "yocto-relwithdebinfo"},
+        )
+
+        self._seed_current("yocto-relwithdebinfo", "yocto-build")
+        self.assertEqual(
+            _complete_presets(prefix="", parsed_args=parsed)[0], "yocto-relwithdebinfo"
+        )
+
+    def test_preset_use_increments_the_existing_workspace_history(self) -> None:
+        self._write_preset_fixtures()
+        self._seed_history({"yocto-relwithdebinfo": 2})
+
+        code, _, stderr = self._invoke(
+            "--project", str(self.project), "preset", "use", "yocto-build"
+        )
+
+        self.assertEqual((code, stderr), (0, ""))
+        history = json.loads(history_path(self.project).read_text())
+        self.assertEqual(history["presets"]["yocto-relwithdebinfo"]["uses"], 3)
+
+    def test_preset_use_without_a_matching_build_preset_stores_none(self) -> None:
+        self._write_preset_fixtures()
+        presets = json.loads((self.project / "flexiv" / "CMakePresets.json").read_text())
+        presets["buildPresets"] = []
+        (self.project / "flexiv" / "CMakePresets.json").write_text(json.dumps(presets))
+        self._commit_preset_fixtures()
+
+        code, stdout, stderr = self._invoke(
+            "--project", str(self.project), "preset", "use", "ubuntu-relwithdebinfo"
+        )
+
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertEqual(
+            stdout, f"Remembered preset 'ubuntu-relwithdebinfo' in {current_path(self.project)}.\n"
+        )
+        self.assertIsNone(json.loads(current_path(self.project).read_text())["preset"])
